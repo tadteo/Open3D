@@ -2,6 +2,7 @@ open3d_ispc_add_library(geometry OBJECT)
 
 target_sources(geometry PRIVATE
     BoundingVolume.cpp
+    CryoEMOctree.cpp
     EstimateNormals.cpp
     Geometry3D.cpp
     HalfEdgeTriangleMesh.cpp
