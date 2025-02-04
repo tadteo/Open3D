@@ -233,6 +233,7 @@ void pybind_geometry_declarations(py::module &m) {
     pybind_image_declarations(m_geometry);
     pybind_tetramesh_declarations(m_geometry);
     pybind_octree_declarations(m_geometry);
+    pybind_cryoem_octree(m_geometry);
     pybind_boundingvolume_declarations(m_geometry);
 }
 

@@ -24,6 +24,7 @@ void pybind_halfedgetrianglemesh_declarations(py::module &m);
 void pybind_image_declarations(py::module &m);
 void pybind_tetramesh_declarations(py::module &m);
 void pybind_octree_declarations(py::module &m);
+void pybind_cryoem_octree(py::module &m);
 void pybind_boundingvolume_declarations(py::module &m);
 
 void pybind_geometry_definitions(py::module &m);
