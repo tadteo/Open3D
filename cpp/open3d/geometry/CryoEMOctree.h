@@ -1,150 +1,131 @@
 #pragma once
 
 #include "open3d/geometry/Octree.h"
+#include <memory>
+#include <vector>
+#include <functional>
 
 namespace open3d {
 namespace geometry {
 
-/// A derived octree class that stores Cryo-EM specific data.
+/**
+ * @brief A derived octree leaf node class that stores Cryo-EM specific data.
+ */
 class CryoEMOctreeLeafNode : public OctreeLeafNode {
 public:
-    // Define the smart pointer type
+    /// Smart pointer type for CryoEMOctreeLeafNode.
     using Ptr = std::shared_ptr<CryoEMOctreeLeafNode>;
 
-    CryoEMOctreeLeafNode() : density_(0.0f), resolution_(0.0f) {}
+    /**
+     * @brief Default constructor initializing density and resolution.
+     */
+    CryoEMOctreeLeafNode();
 
-    /// Custom fields
+    /**
+     * @brief Creates a deep copy of the leaf node.
+     * @return A shared pointer to the cloned OctreeLeafNode.
+     */
+    std::shared_ptr<OctreeLeafNode> Clone() const override;
+
+    /**
+     * @brief Serializes the node data to a JSON value.
+     * @param value JSON value to hold serialized data.
+     * @return True if serialization is successful.
+     */
+    bool ConvertToJsonValue(Json::Value &value) const override;
+
+    /**
+     * @brief Deserializes the node data from a JSON value.
+     * @param value JSON value containing the node data.
+     * @return True if deserialization is successful.
+     */
+    bool ConvertFromJsonValue(const Json::Value &value) override;
+
+    /**
+     * @brief Compares this leaf node with another OctreeLeafNode.
+     * @param other The other OctreeLeafNode to compare with.
+     * @return True if nodes are equal, false otherwise.
+     */
+    bool operator==(const OctreeLeafNode& other) const override;
+
+    /// Returns a lambda that creates a new CryoEMOctreeLeafNode.
+    static std::function<std::shared_ptr<OctreeLeafNode>()> GetInitFunction();
+
+    /// Returns a lambda that updates a CryoEMOctreeLeafNode with the given density and resolution.
+    static std::function<void(std::shared_ptr<OctreeLeafNode>)>
+    GetUpdateFunction(float density, float resolution);
+
+    // Cryo-EM specific data fields.
     float density_;
     float resolution_;
-
-    // Overriding Clone function if you need duplication of node.
-    std::shared_ptr<OctreeLeafNode> Clone() const override {
-        auto node = std::make_shared<CryoEMOctreeLeafNode>();
-        node->density_ = density_;
-        node->resolution_ = resolution_;
-        // Clone base node data if needed
-        return node;
-    }
-
-    // You can override other methods (e.g. IsLeaf(), etc.) if needed.
-
-    // Implement pure virtual functions
-    bool ConvertToJsonValue(Json::Value &value) const override {
-        // Implementation
-        return true; // Example return value
-    }
-
-    bool ConvertFromJsonValue(const Json::Value &value) override {
-        // Implementation
-        return true; // Example return value
-    }
-
-    bool operator==(const OctreeLeafNode& other) const override {
-        // Implementation
-        return true; // Example return value
-    }
 };
 
+/**
+ * @brief A derived octree internal node class that stores aggregated Cryo-EM data.
+ */
 class CryoEMOctreeInternalNode : public OctreeInternalNode {
 public:
+    /// Smart pointer type for CryoEMOctreeInternalNode.
     using Ptr = std::shared_ptr<CryoEMOctreeInternalNode>;
 
-    CryoEMOctreeInternalNode() : density_(0.0f), resolution_(0.0f) {}
+    /**
+     * @brief Default constructor initializing density and resolution.
+     */
+    CryoEMOctreeInternalNode();
 
+    /**
+     * @brief Aggregates density and resolution values from child nodes.
+     */
+    void AggregateChildren();
+
+    /**
+     * @brief Creates a deep copy of the internal node.
+     * @return A shared pointer to the cloned OctreeInternalNode.
+     */
+    std::shared_ptr<OctreeInternalNode> Clone() const;
+
+    // Aggregated Cryo-EM specific data fields.
     float density_;
     float resolution_;
-
-    // Example: aggregate from children
-    void AggregateChildren() {
-        double sum_density = 0.0;
-        double sum_resolution = 0.0;
-        int count = 0;
-        for (auto &child : children_) {
-            if (child) {
-                // If child is a CryoEMLeafNode
-                auto leaf = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(child);
-                if (leaf) {
-                    sum_density += leaf->density_;
-                    sum_resolution += leaf->resolution_;
-                    count++;
-                }
-                // If child is a CryoEMInternalNode
-                auto inode = std::dynamic_pointer_cast<CryoEMOctreeInternalNode>(child);
-                if (inode) {
-                    sum_density += inode->density_;
-                    sum_resolution += inode->resolution_;
-                    count++;
-                }
-            }
-        }
-        if (count > 0) {
-            density_ = static_cast<float>(sum_density / count);
-            resolution_ = static_cast<float>(sum_resolution / count);
-        }
-    }
-
-    std::shared_ptr<OctreeInternalNode> Clone() const {
-        auto node = std::make_shared<CryoEMOctreeInternalNode>();
-        node->density_ = density_;
-        node->resolution_ = resolution_;
-        // children_ are typically cloned at the Octree level
-        return node;
-    }
 };
 
+/**
+ * @brief An octree structure specialized for storing Cryo-EM data.
+ */
 class CryoEMOctree : public Octree {
 public:
+    /// Smart pointer type for CryoEMOctree.
     using Ptr = std::shared_ptr<CryoEMOctree>;
 
-    CryoEMOctree(int max_depth,
-                 const Eigen::Vector3d &origin,
-                 double size)
-        : Octree(max_depth, origin, size) {
-        // By default, we use a CryoEMOctreeInternalNode as root
-        root_node_ = std::make_shared<CryoEMOctreeInternalNode>();
-    }
+    /**
+     * @brief Constructs a new CryoEMOctree.
+     * @param max_depth Maximum depth of the octree.
+     * @param origin Origin of the octree.
+     * @param size Size of the octree.
+     */
+    CryoEMOctree(int max_depth, const Eigen::Vector3d &origin, double size);
 
-    /// Example of specialized insertion
-    void InsertDensityPoint(const Eigen::Vector3d &point,
-                            float density,
-                            float resolution) {
-        auto leaf_init = [density, resolution]() {
-            auto leaf = std::make_shared<CryoEMOctreeLeafNode>();
-            leaf->density_ = density;
-            leaf->resolution_ = resolution;
-            return leaf;
-        };
-        auto leaf_update = [density, resolution](std::shared_ptr<OctreeLeafNode> node) {
-            auto cryo_node = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(node);
-            if (cryo_node) {
-                cryo_node->density_ = density;
-                cryo_node->resolution_ = resolution;
-            }
-        };
-        InsertPoint(point, leaf_init, leaf_update);
-    }
+    /**
+     * @brief Inserts a point along with its cryo-EM density and resolution.
+     * @param point The 3D point to be inserted.
+     * @param density Density value at the point.
+     * @param resolution Resolution value at the point.
+     */
+    void InsertDensityPoint(const Eigen::Vector3d &point, float density, float resolution);
 
-    // Example aggregator
-    void AggregateAllNodes() {
-        // If root_node_ is a CryoEMOctreeInternalNode, do a BFS/DFS
-        AggregateSubtree(root_node_);
-    }
+    void CompressNode(std::shared_ptr<OctreeNode>& node);
+
+    /**
+     * @brief Splits the octree for further refinement.
+     */
+    void SplitTreeGeneric();
 
 private:
-    void AggregateSubtree(std::shared_ptr<OctreeNode> node) {
-        auto inode = std::dynamic_pointer_cast<CryoEMOctreeInternalNode>(node);
-        if (inode) {
-            // Recurse
-            for (auto &child : inode->children_) {
-                if (child) {
-                    AggregateSubtree(child);
-                }
-            }
-            // Then aggregate
-            inode->AggregateChildren();
-        }
-        // If it's a leaf node, nothing to do
-    }
+    /**
+     * @brief Recursively aggregates data in the subtree starting from the given node.
+     * @param node The root node of the subtree.
+     */
+    void AggregateSubtree(std::shared_ptr<OctreeNode> node);
 };
 
 } // namespace geometry

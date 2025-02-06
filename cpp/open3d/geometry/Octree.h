@@ -37,7 +37,7 @@ public:
     /// \param origin Origin coordinate of the node
     /// \param size Size of the node.
     /// \param depth  Depth of the node to the root. The root is of depth 0.
-    /// \param child_index Node’s child index of itself.
+    /// \param child_index Node's child index of itself.
     OctreeNodeInfo(const Eigen::Vector3d& origin,
                    const double& size,
                    const size_t& depth,
@@ -55,8 +55,8 @@ public:
     double size_;
     /// Depth of the node to the root. The root is of depth 0.
     size_t depth_;
-    /// Node’s child index of itself. For non-root nodes, child_index is 0~7;
-    /// root node’s child_index is -1.
+    /// Node's child index of itself. For non-root nodes, child_index is 0~7;
+    /// root node's child_index is -1.
     size_t child_index_;
 };
 
@@ -401,6 +401,14 @@ public:
     /// Convert from voxel grid.
     void CreateFromVoxelGrid(const geometry::VoxelGrid& voxel_grid);
 
+    /* Tree Modification Operations:
+     * - SplitLeafNode: Replace a leaf node by an internal node that has 8 children,
+     *   each initialized from the parent leaf.
+     */
+    virtual std::shared_ptr<OctreeNode> SplitLeafNode(
+        const std::shared_ptr<OctreeLeafNode>& leaf,
+        const std::shared_ptr<OctreeNodeInfo>& node_info);
+
 private:
     static void TraverseRecurse(
             const std::shared_ptr<OctreeNode>& node,
@@ -420,6 +428,15 @@ private:
                     f_i_init,
             const std::function<void(std::shared_ptr<OctreeInternalNode>)>&
                     f_i_update);
+
+    static std::shared_ptr<OctreeLeafNode> ConvertInternalToLeaf(
+        const std::shared_ptr<OctreeInternalNode>& internal);
+
+    // Helper functions for recursive operations.
+    static std::shared_ptr<OctreeNode> RecursiveCollapse(
+         const std::shared_ptr<OctreeNode>& node);
+    static std::shared_ptr<OctreeNode> RecursivePrune(
+         const std::shared_ptr<OctreeNode>& node);
 };
 
 }  // namespace geometry

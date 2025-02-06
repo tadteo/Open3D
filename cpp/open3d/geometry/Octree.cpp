@@ -800,5 +800,39 @@ void Octree::CreateFromVoxelGrid(const geometry::VoxelGrid& voxel_grid) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Updated static helper function to convert an internal node to a leaf node.
+// Instead of creating a new (default) OctreeLeafNode (which is abstract),
+// we take a representative child (assumed to be non-null) and clone it.
+// ---------------------------------------------------------------------------
+std::shared_ptr<OctreeLeafNode> Octree::ConvertInternalToLeaf(
+        const std::shared_ptr<OctreeInternalNode>& internal) {
+    if (!internal->children_.empty()) {
+        // Cast the first child to a leaf node.
+        auto child = internal->children_.front();
+        auto leaf = std::dynamic_pointer_cast<OctreeLeafNode>(child);
+        if (leaf) {
+            return leaf->Clone();
+        }
+    }
+    return nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// SplitLeafNode remains unchanged. It splits a leaf node into an internal node
+// with 8 children, each initialized from a clone of the parent leaf.
+// ---------------------------------------------------------------------------
+std::shared_ptr<OctreeNode> Octree::SplitLeafNode(
+        const std::shared_ptr<OctreeLeafNode>& leaf,
+        const std::shared_ptr<OctreeNodeInfo>& node_info) {
+    auto newInternal = std::make_shared<OctreeInternalNode>();
+    newInternal->children_.resize(8, nullptr);
+    
+    for (size_t idx = 0; idx < 8; ++idx) {
+        newInternal->children_[idx] = leaf->Clone();
+    }
+    return newInternal;
+}
+
 }  // namespace geometry
 }  // namespace open3d

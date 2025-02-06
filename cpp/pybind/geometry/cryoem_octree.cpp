@@ -42,9 +42,10 @@ void pybind_cryoem_octree(py::module &m) {
              &CryoEMOctree::InsertDensityPoint,
              "Insert a point with density/resolution.",
              "point"_a, "density"_a, "resolution"_a)
-        .def("aggregate_all_nodes",
-             &CryoEMOctree::AggregateAllNodes,
-             "Aggregate child data up the tree.")
+        .def("compress_node", &CryoEMOctree::CompressNode,
+          "Compress an internal Cryo-EM node in place if eligible. "
+          "The function updates the node pointer with a merged leaf node if compression applies.",
+          py::arg("node"))
         .def("__repr__", [](const CryoEMOctree &oct) {
             return std::string("CryoEMOctree with max_depth=") +
                    std::to_string(oct.max_depth_) +
