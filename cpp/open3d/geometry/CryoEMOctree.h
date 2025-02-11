@@ -17,7 +17,7 @@ public:
     using Ptr = std::shared_ptr<CryoEMOctreeLeafNode>;
 
     /**
-     * @brief Default constructor initializing density and resolution.
+     * @brief Default constructor initializing density.
      */
     CryoEMOctreeLeafNode();
 
@@ -51,13 +51,12 @@ public:
     /// Returns a lambda that creates a new CryoEMOctreeLeafNode.
     static std::function<std::shared_ptr<OctreeLeafNode>()> GetInitFunction();
 
-    /// Returns a lambda that updates a CryoEMOctreeLeafNode with the given density and resolution.
+    /// Returns a lambda that updates a CryoEMOctreeLeafNode with the given density.
     static std::function<void(std::shared_ptr<OctreeLeafNode>)>
-    GetUpdateFunction(float density, float resolution);
+    GetUpdateFunction(float density);
 
-    // Cryo-EM specific data fields.
+    // Cryo-EM specific data field.
     float density_;
-    float resolution_;
 };
 
 /**
@@ -69,12 +68,12 @@ public:
     using Ptr = std::shared_ptr<CryoEMOctreeInternalNode>;
 
     /**
-     * @brief Default constructor initializing density and resolution.
+     * @brief Default constructor initializing density.
      */
-    CryoEMOctreeInternalNode();
+    CryoEMOctreeInternalNode() : OctreeInternalNode() {}
 
     /**
-     * @brief Aggregates density and resolution values from child nodes.
+     * @brief Aggregates density values from child nodes.
      */
     void AggregateChildren();
 
@@ -84,9 +83,8 @@ public:
      */
     std::shared_ptr<OctreeInternalNode> Clone() const;
 
-    // Aggregated Cryo-EM specific data fields.
+    // Aggregated Cryo-EM specific data field.
     float density_;
-    float resolution_;
 };
 
 /**
@@ -106,12 +104,11 @@ public:
     CryoEMOctree(int max_depth, const Eigen::Vector3d &origin, double size);
 
     /**
-     * @brief Inserts a point along with its cryo-EM density and resolution.
+     * @brief Inserts a point along with its Cryo-EM density.
      * @param point The 3D point to be inserted.
      * @param density Density value at the point.
-     * @param resolution Resolution value at the point.
      */
-    void InsertDensityPoint(const Eigen::Vector3d &point, float density, float resolution);
+    void InsertDensityPoint(const Eigen::Vector3d &point, float density);
 
     void CompressNode(std::shared_ptr<OctreeNode>& node);
 
@@ -120,7 +117,44 @@ public:
      */
     void SplitTreeGeneric();
 
+    /**
+     * @brief Returns the total number of nodes in the octree.
+     * @return The count of nodes.
+     */
+    int CountNodes() const;
+
+    /**
+     * @brief Recursively compresses the octree using a post-order traversal.
+     *
+     * All internal nodes whose non-null children are leaves
+     * and whose children's densities vary by no more than tolerance
+     * are replaced (compressed) by a merged leaf node.
+     *
+     * @param tolerance Maximum allowed difference between children densities.
+     * @param merge_count (Output) Total number of merges performed.
+     * @param avg_error   (Output) Average error of the merges.
+     */
+    void CompressOctree(float tolerance, int &merge_count, float &avg_error);
+
 private:
+    /**
+     * @brief Helper for CompressOctree: recursively walk through the tree.
+     *
+     * If every non-null child of an internal node is a CryoEMOctreeLeafNode and their
+     * densities differ by less than tolerance, compress that node using CompressNode.
+     *
+     * @param node          Current node (passed by reference so that pointer update is effective).
+     * @param tolerance     The allowed tolerance.
+     * @param merge_count   (Output) Merge counter.
+     * @param merge_errors  (Output) A vector holding merge error values.
+     * @param changes       (Output) Set to true if any merge occurs during this pass.
+     */
+    void CompressOctreeRecursive(std::shared_ptr<OctreeNode> &node,
+                                 float tolerance,
+                                 int &merge_count,
+                                 std::vector<float> &merge_errors,
+                                 bool &changes);
+
     /**
      * @brief Recursively aggregates data in the subtree starting from the given node.
      * @param node The root node of the subtree.

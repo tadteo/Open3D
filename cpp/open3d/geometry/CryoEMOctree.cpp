@@ -2,6 +2,8 @@
 #include <cmath>           // for std::fabs
 #include <json/json.h>     // For JSON handling (if needed)
 #include "open3d/utility/Logging.h"
+#include <numeric>  // for std::accumulate
+#include <limits>   // for std::numeric_limits
 
 /*
  * This file contains the implementation of the CryoEMOctree and its associated nodes.
@@ -11,30 +13,29 @@ namespace open3d {
 namespace geometry {
 
 /**
- * @brief Attempts to compress an internal Cryo-EM node in place, if all its immediate children are leaf nodes
- * or null. The compression aggregates the density and resolution values using a weighted average (by resolution),
+ * @brief Attempts to compress an internal Cryo‑EM node in place, if all its immediate children are leaf nodes
+ * or null. The compression aggregates the density values using a simple arithmetic mean,
  * and replaces the node with a new leaf node if eligible.
  *
  * This function modifies the tree in place: when called with a reference to a node pointer in the tree, if the node
- * qualifies for compression, its pointer is updated to point to a new CryoEMOctreeLeafNode with the aggregated values.
+ * qualifies for compression, its pointer is updated to point to a new CryoEMOctreeLeafNode with the aggregated value.
  *
  * @param node A reference to the node pointer to possibly compress.
  */
 void CryoEMOctree::CompressNode(std::shared_ptr<OctreeNode>& node) {
-    // Debug: print pointer value of the incoming node using fmt::ptr.
-    utility::LogInfo("Before compression, node: {}", fmt::ptr(node.get()));
-
-    
-    if (!node) return;
-    
-    // Check if the node is an internal Cryo-EM node.
-    auto internal = std::dynamic_pointer_cast<CryoEMOctreeInternalNode>(node);
-    if (!internal) {
-        // Node is already a leaf (or not an internal node), so nothing to compress.
+    if (!node) {
+        utility::LogInfo("Node is null");
         return;
     }
-    
-    // Check that every non-null child is a Cryo-EM leaf node.
+
+    // Check if the node is an internal Cryo‑EM node.
+    auto internal = std::dynamic_pointer_cast<CryoEMOctreeInternalNode>(node);
+    if (!internal) {
+        utility::LogInfo("Node is not an internal node");
+        return;
+    }
+
+    // Check that every non-null child is a Cryo‑EM leaf node.
     bool eligible = true;
     std::vector<std::shared_ptr<CryoEMOctreeLeafNode>> leaves;
     for (auto& child : internal->children_) {
@@ -48,46 +49,23 @@ void CryoEMOctree::CompressNode(std::shared_ptr<OctreeNode>& node) {
         }
     }
     if (!eligible || leaves.empty()) {
-        // The node is not eligible for compression.
+        utility::LogInfo("Node is not eligible for compression");
         return;
     }
-    
-    // Aggregate the leaf data using a weighted average (using each leaf's resolution as its weight).
-    float total_weight = 0.0f;
-    float weighted_density_sum = 0.0f;
-    float weighted_resolution_sum = 0.0f;
+    // Aggregate the leaf data using arithmetic mean.
+    float sum_density = 0.0f;
     for (const auto& leaf : leaves) {
-        float weight = leaf->resolution_;
-        total_weight += weight;
-        weighted_density_sum += leaf->density_ * weight;
-        weighted_resolution_sum += leaf->resolution_ * weight;
+        sum_density += leaf->density_;
     }
     
-    float new_density = 0.0f, new_resolution = 0.0f;
-    if (total_weight > 0.0f) {
-        new_density = weighted_density_sum / total_weight;
-        new_resolution = weighted_resolution_sum / total_weight;
-    } else {
-        // If total weight is zero, fall back to the arithmetic mean.
-        for (const auto& leaf : leaves) {
-            new_density += leaf->density_;
-            new_resolution += leaf->resolution_;
-        }
-        new_density /= static_cast<float>(leaves.size());
-        new_resolution /= static_cast<float>(leaves.size());
-    }
+    float new_density = sum_density / static_cast<float>(leaves.size());
     
     // Construct a new leaf node representing the compressed branch.
     auto merged_leaf = std::make_shared<CryoEMOctreeLeafNode>();
     merged_leaf->density_ = new_density;
-    merged_leaf->resolution_ = new_resolution;
     
     // Update the node in place by replacing it with the merged leaf.
-    // After making the new merged node, print out its pointer:
-    utility::LogInfo("After compression, merged_leaf: {}", fmt::ptr(merged_leaf.get()));
     node = merged_leaf;
-    utility::LogInfo("Updated node pointer: {}", fmt::ptr(node.get()));
-
 }
 
 //==============================================================================
@@ -95,41 +73,32 @@ void CryoEMOctree::CompressNode(std::shared_ptr<OctreeNode>& node) {
 //==============================================================================
 
 CryoEMOctreeLeafNode::CryoEMOctreeLeafNode() 
-    : density_(0.0f), resolution_(0.0f) {}
+    : density_(0.0f) {}
 
 std::shared_ptr<OctreeLeafNode> CryoEMOctreeLeafNode::Clone() const {
     auto node = std::make_shared<CryoEMOctreeLeafNode>();
     node->density_ = density_;
-    node->resolution_ = resolution_;
-    // Additional base class data can be cloned here if needed.
     return node;
 }
 
 bool CryoEMOctreeLeafNode::ConvertToJsonValue(Json::Value &value) const {
-    // Serialize the Cryo-EM specific data.
+    // Serialize the Cryo‑EM specific data.
     value["density"] = density_;
-    value["resolution"] = resolution_;
-    // Serialize base class data here, if necessary.
     return true;
 }
 
 bool CryoEMOctreeLeafNode::ConvertFromJsonValue(const Json::Value &value) {
-    // Ensure required fields are present.
-    if (!value.isMember("density") || !value.isMember("resolution"))
+    if (!value.isMember("density"))
         return false;
         
     density_ = value["density"].asFloat();
-    resolution_ = value["resolution"].asFloat();
-    // Deserialize base class data here if needed.
     return true;
 }
 
 bool CryoEMOctreeLeafNode::operator==(const OctreeLeafNode& other) const {
-    // Attempt dynamic cast to compare Cryo-EM-specific fields.
     const CryoEMOctreeLeafNode* other_leaf = dynamic_cast<const CryoEMOctreeLeafNode*>(&other);
     if (!other_leaf) return false;
-    return (std::fabs(density_ - other_leaf->density_) < 1e-6f &&
-            std::fabs(resolution_ - other_leaf->resolution_) < 1e-6f);
+    return (std::fabs(density_ - other_leaf->density_) < 1e-6f);
 }
 
 std::function<std::shared_ptr<OctreeLeafNode>()> 
@@ -140,12 +109,10 @@ CryoEMOctreeLeafNode::GetInitFunction() {
 }
 
 std::function<void(std::shared_ptr<OctreeLeafNode>)>
-CryoEMOctreeLeafNode::GetUpdateFunction(float density, float resolution) {
-    return [density, resolution](std::shared_ptr<OctreeLeafNode> node) -> void {
-        if (auto cryo_node = 
-                std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(node)) {
+CryoEMOctreeLeafNode::GetUpdateFunction(float density) {
+    return [density](std::shared_ptr<OctreeLeafNode> node) -> void {
+        if (auto cryo_node = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(node)) {
             cryo_node->density_ = density;
-            cryo_node->resolution_ = resolution;
         } else {
             utility::LogError("Internal error: node must be CryoEMOctreeLeafNode");
         }
@@ -156,42 +123,33 @@ CryoEMOctreeLeafNode::GetUpdateFunction(float density, float resolution) {
 // Implementation for CryoEMOctreeInternalNode
 //==============================================================================
 
-CryoEMOctreeInternalNode::CryoEMOctreeInternalNode() 
-    : density_(0.0f), resolution_(0.0f) {}
-
 void CryoEMOctreeInternalNode::AggregateChildren() {
     double sum_density = 0.0;
-    double sum_resolution = 0.0;
     int count = 0;
-    // Aggregate data from each child.
+    // Aggregate density from each child.
     for (auto &child : children_) {
         if (child) {
             auto leaf = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(child);
             if (leaf) {
                 sum_density += leaf->density_;
-                sum_resolution += leaf->resolution_;
                 count++;
                 continue;
             }
             auto inode = std::dynamic_pointer_cast<CryoEMOctreeInternalNode>(child);
             if (inode) {
                 sum_density += inode->density_;
-                sum_resolution += inode->resolution_;
                 count++;
             }
         }
     }
     if (count > 0) {
         density_ = static_cast<float>(sum_density / count);
-        resolution_ = static_cast<float>(sum_resolution / count);
     }
 }
 
 std::shared_ptr<OctreeInternalNode> CryoEMOctreeInternalNode::Clone() const {
     auto node = std::make_shared<CryoEMOctreeInternalNode>();
     node->density_ = density_;
-    node->resolution_ = resolution_;
-    // Note: Cloning of child nodes is typically handled at the tree level.
     return node;
 }
 
@@ -201,38 +159,43 @@ std::shared_ptr<OctreeInternalNode> CryoEMOctreeInternalNode::Clone() const {
 
 CryoEMOctree::CryoEMOctree(int max_depth, const Eigen::Vector3d &origin, double size)
     : Octree(max_depth, origin, size) {
-    // By default, initialize the root as a CryoEM internal node.
     root_node_ = std::make_shared<CryoEMOctreeInternalNode>();
 }
 
-void CryoEMOctree::InsertDensityPoint(const Eigen::Vector3d &point, float density, float resolution) {
-    // Lambda to create a new leaf node with cryo-EM data.
-    auto leaf_init = [density, resolution]() -> std::shared_ptr<OctreeLeafNode> {
-        auto leaf = std::make_shared<CryoEMOctreeLeafNode>();
-        leaf->density_ = density;
-        leaf->resolution_ = resolution;
-        return leaf;
+void CryoEMOctree::InsertDensityPoint(const Eigen::Vector3d &point, float density) {
+    // Define an initializer for Cryo‑EM leaf nodes.
+    auto cryoLeafInit = []() -> std::shared_ptr<OctreeLeafNode> {
+        return std::make_shared<CryoEMOctreeLeafNode>();
     };
-    // Lambda to update an existing leaf node's cryo-EM data.
-    auto leaf_update = [density, resolution](std::shared_ptr<OctreeLeafNode> node) {
-        auto cryo_node = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(node);
-        if (cryo_node) {
-            cryo_node->density_ = density;
-            cryo_node->resolution_ = resolution;
+
+    // Define an updater for Cryo‑EM leaf nodes that stores the density.
+    auto cryoLeafUpdate = [density](std::shared_ptr<OctreeLeafNode> node) {
+        if (auto cryoLeaf = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(node)) {
+            cryoLeaf->density_ = density;
+        } else {
+            utility::LogError("InsertDensityPoint: Node is not a CryoEMOctreeLeafNode.");
         }
     };
-    // Use base class InsertPoint method.
-    InsertPoint(point, leaf_init, leaf_update);
-}
 
+    // Define an initializer for Cryo‑EM internal nodes.
+    auto cryoInternalInit = []() -> std::shared_ptr<OctreeInternalNode> {
+        return std::make_shared<CryoEMOctreeInternalNode>();
+    };
+
+    // Define an updater for Cryo‑EM internal nodes (if needed).
+    auto cryoInternalUpdate = [](std::shared_ptr<OctreeInternalNode> node) {
+        // Optionally update aggregated parameters.
+    };
+
+    // Use the base class InsertPoint method with our lambdas.
+    this->InsertPoint(point, cryoLeafInit, cryoLeafUpdate, cryoInternalInit, cryoInternalUpdate);
+}
 
 void CryoEMOctree::SplitTreeGeneric() {
     // Implementation for splitting nodes can be added as needed.
-    // Currently, this method is not implemented.
 }
 
 void CryoEMOctree::AggregateSubtree(std::shared_ptr<OctreeNode> node) {
-    // If the node is an internal CryoEM node, process its children recursively.
     auto internal = std::dynamic_pointer_cast<CryoEMOctreeInternalNode>(node);
     if (internal) {
         for (auto &child : internal->children_) {
@@ -240,10 +203,111 @@ void CryoEMOctree::AggregateSubtree(std::shared_ptr<OctreeNode> node) {
                 AggregateSubtree(child);
             }
         }
-        // After processing children, aggregate data up to the current node.
         internal->AggregateChildren();
     }
-    // For leaf nodes, no aggregation is necessary.
+}
+
+//------------------------------------------------------------------------------
+// Implementation for CryoEMOctree::CompressOctreeRecursive
+//------------------------------------------------------------------------------
+void CryoEMOctree::CompressOctreeRecursive(std::shared_ptr<OctreeNode> &node,
+                                            float tolerance,
+                                            int &merge_count,
+                                            std::vector<float> &merge_errors,
+                                            bool &changes) {
+    if (!node) return;
+
+    auto internal = std::dynamic_pointer_cast<OctreeInternalNode>(node);
+    if (!internal) return;
+
+    // Post‑order traversal.
+    for (auto &child : internal->children_) {
+        CompressOctreeRecursive(child, tolerance, merge_count, merge_errors, changes);
+    }
+
+    // Check if all non-null children are leaves.
+    bool compressible = true;
+    std::vector<std::shared_ptr<CryoEMOctreeLeafNode>> leaf_children;
+    for (auto &child : internal->children_) {
+        if (child) {
+            auto leaf = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(child);
+            if (!leaf) {
+                compressible = false;
+                break;
+            }
+            leaf_children.push_back(leaf);
+        }
+    }
+    if (!compressible || leaf_children.empty()) return;
+
+    // Determine density min/max and decide on merge eligibility.
+    float min_density = std::numeric_limits<float>::max();
+    float max_density = std::numeric_limits<float>::lowest();
+    float sum_density = 0.0f;
+    for (const auto &leaf : leaf_children) {
+        float d = leaf->density_;
+        if (d < min_density) { min_density = d; }
+        if (d > max_density) { max_density = d; }
+        sum_density += d;
+    }
+    if ((max_density - min_density) > tolerance) return;
+
+    float avg_density = sum_density / static_cast<float>(leaf_children.size());
+    float error_sum = 0.0f;
+    for (const auto &leaf : leaf_children) {
+        error_sum += std::fabs(leaf->density_ - avg_density);
+    }
+    float error_avg = error_sum / leaf_children.size();
+    merge_errors.push_back(error_avg);
+
+    // Compress the node.
+    CompressNode(node);
+    merge_count++;
+}
+
+//------------------------------------------------------------------------------
+// Implementation for CryoEMOctree::CompressOctree
+//------------------------------------------------------------------------------
+void CryoEMOctree::CompressOctree(float tolerance, int &merge_count, float &avg_error) {
+    merge_count = 0;
+    std::vector<float> merge_errors;
+    bool changes = true;
+    int pass_count = 0;
+
+    while (changes) {
+        pass_count++;
+        changes = false;
+        CompressOctreeRecursive(root_node_, tolerance, merge_count, merge_errors, changes);
+        
+        int current_node_count = CountNodes();
+        utility::LogInfo("[DEBUG] End of pass {} ; Total merges: {} ; Node count: {}",
+                         pass_count, merge_count, current_node_count);
+    }
+    if (!merge_errors.empty()) {
+        avg_error = std::accumulate(merge_errors.begin(), merge_errors.end(), 0.0f) / merge_errors.size();
+    } else {
+        avg_error = 0.0f;
+    }
+    utility::LogInfo("[DEBUG] Compression finished after {} passes. Final merge count: {} ; avg error: {}",
+                     pass_count, merge_count, avg_error);
+}
+
+// Helper function to recursively count nodes.
+static int CountNodesRecursive(const std::shared_ptr<OctreeNode>& node) {
+    if (!node)
+        return 0;
+    int count = 1;
+    auto internal = std::dynamic_pointer_cast<OctreeInternalNode>(node);
+    if (internal) {
+        for (const auto &child : internal->children_) {
+            count += CountNodesRecursive(child);
+        }
+    }
+    return count;
+}
+
+int CryoEMOctree::CountNodes() const {
+    return CountNodesRecursive(root_node_);
 }
 
 } // namespace geometry

@@ -14,11 +14,9 @@ void pybind_cryoem_octree(py::module &m) {
                OctreeLeafNode>(m, "CryoEMOctreeLeafNode")
         .def(py::init<>())
         .def_readwrite("density", &CryoEMOctreeLeafNode::density_)
-        .def_readwrite("resolution", &CryoEMOctreeLeafNode::resolution_)
         .def("__repr__", [](const CryoEMOctreeLeafNode &n) {
             return std::string("CryoEMOctreeLeafNode(density=") +
-                   std::to_string(n.density_) + ", resolution=" +
-                   std::to_string(n.resolution_) + ")";
+                   std::to_string(n.density_) + ")";
         });
 
     // Bind the internal node
@@ -27,7 +25,6 @@ void pybind_cryoem_octree(py::module &m) {
                OctreeInternalNode>(m, "CryoEMOctreeInternalNode")
         .def(py::init<>())
         .def_readwrite("density", &CryoEMOctreeInternalNode::density_)
-        .def_readwrite("resolution", &CryoEMOctreeInternalNode::resolution_)
         .def("aggregate_children",
              &CryoEMOctreeInternalNode::AggregateChildren);
 
@@ -40,12 +37,22 @@ void pybind_cryoem_octree(py::module &m) {
              "size"_a = 1.0)
         .def("insert_density_point",
              &CryoEMOctree::InsertDensityPoint,
-             "Insert a point with density/resolution.",
-             "point"_a, "density"_a, "resolution"_a)
+             "Insert a point with density.",
+             "point"_a, "density"_a)
         .def("compress_node", &CryoEMOctree::CompressNode,
           "Compress an internal Cryo-EM node in place if eligible. "
           "The function updates the node pointer with a merged leaf node if compression applies.",
           py::arg("node"))
+        .def("compress_octree", [](CryoEMOctree &octree, float tolerance) {
+            int merge_count = 0;
+            float avg_error = 0.0f;
+            octree.CompressOctree(tolerance, merge_count, avg_error);
+            // Return a tuple: (merge_count, avg_error)
+            return py::make_tuple(merge_count, avg_error);
+        }, "Compress the octree given a tolerance.")
+        .def("count_nodes", [](const CryoEMOctree &octree) {
+            return octree.CountNodes();
+        }, "Count the total number of nodes in the octree.")
         .def("__repr__", [](const CryoEMOctree &oct) {
             return std::string("CryoEMOctree with max_depth=") +
                    std::to_string(oct.max_depth_) +
