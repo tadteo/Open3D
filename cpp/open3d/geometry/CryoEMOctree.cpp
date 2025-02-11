@@ -21,6 +21,10 @@ namespace geometry {
  * @param node A reference to the node pointer to possibly compress.
  */
 void CryoEMOctree::CompressNode(std::shared_ptr<OctreeNode>& node) {
+    // Debug: print pointer value of the incoming node using fmt::ptr.
+    utility::LogInfo("Before compression, node: {}", fmt::ptr(node.get()));
+
+    
     if (!node) return;
     
     // Check if the node is an internal Cryo-EM node.
@@ -79,7 +83,11 @@ void CryoEMOctree::CompressNode(std::shared_ptr<OctreeNode>& node) {
     merged_leaf->resolution_ = new_resolution;
     
     // Update the node in place by replacing it with the merged leaf.
+    // After making the new merged node, print out its pointer:
+    utility::LogInfo("After compression, merged_leaf: {}", fmt::ptr(merged_leaf.get()));
     node = merged_leaf;
+    utility::LogInfo("Updated node pointer: {}", fmt::ptr(node.get()));
+
 }
 
 //==============================================================================
