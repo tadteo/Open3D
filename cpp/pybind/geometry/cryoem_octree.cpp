@@ -50,6 +50,13 @@ void pybind_cryoem_octree(py::module &m) {
             // Return a tuple: (merge_count, avg_error)
             return py::make_tuple(merge_count, avg_error);
         }, "Compress the octree given a tolerance.")
+        .def("compress_octree_adaptive", [](CryoEMOctree &octree, float base_tolerance) {
+            int merge_count = 0;
+            float avg_error = 0.0f;
+            octree.CompressOctreeAdaptive(base_tolerance, merge_count, avg_error);
+            // Return a tuple: (merge_count, avg_error)
+            return py::make_tuple(merge_count, avg_error);
+        }, "Compress the octree given a base tolerance.")
         .def("count_nodes", [](const CryoEMOctree &octree) {
             return octree.CountNodes();
         }, "Count the total number of nodes in the octree.")

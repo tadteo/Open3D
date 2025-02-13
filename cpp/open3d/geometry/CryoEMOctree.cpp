@@ -292,6 +292,113 @@ void CryoEMOctree::CompressOctree(float tolerance, int &merge_count, float &avg_
                      pass_count, merge_count, avg_error);
 }
 
+//////////////////////////
+// Adaptive Compression
+//////////////////////////
+
+void CryoEMOctree::CompressOctreeAdaptive(float base_tolerance, int &merge_count, float &avg_error) {
+    merge_count = 0;
+    std::vector<float> merge_errors;
+    bool changes = true;
+    int pass_count = 0;
+    
+    while (changes) {
+        pass_count++;
+        changes = false;
+        CompressOctreeRecursiveAdaptive(root_node_, base_tolerance, merge_count, merge_errors, changes);
+        
+        int current_node_count = CountNodes();
+        utility::LogInfo("[DEBUG] Adaptive pass {} ; Total merges: {} ; Node count: {}",
+                         pass_count, merge_count, current_node_count);
+    }
+    
+    if (!merge_errors.empty()) {
+        avg_error = std::accumulate(merge_errors.begin(), merge_errors.end(), 0.0f) / merge_errors.size();
+    } else {
+        avg_error = 0.0f;
+    }
+    
+    utility::LogInfo("[DEBUG] Adaptive compression finished after {} passes. Final merge count: {} ; avg error: {}",
+                     pass_count, merge_count, avg_error);
+}
+
+void CryoEMOctree::CompressOctreeRecursiveAdaptive(std::shared_ptr<OctreeNode> &node,
+                                                     float base_tolerance,
+                                                     int &merge_count,
+                                                     std::vector<float> &merge_errors,
+                                                     bool &changes) {
+    if (!node) return;
+
+    auto internal = std::dynamic_pointer_cast<OctreeInternalNode>(node);
+    if (!internal) return;
+
+    // Post‑order traversal.
+    for (auto &child : internal->children_) {
+        CompressOctreeRecursiveAdaptive(child, base_tolerance, merge_count, merge_errors, changes);
+    }
+
+    // Check if all non-null children are leaves.
+    bool compressible = true;
+    std::vector<std::shared_ptr<CryoEMOctreeLeafNode>> leaf_children;
+    for (auto &child : internal->children_) {
+        if (child) {
+            auto leaf = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(child);
+            if (!leaf) {
+                compressible = false;
+                break;
+            }
+            leaf_children.push_back(leaf);
+        }
+    }
+    if (!compressible || leaf_children.empty()) return;
+
+    // Compute local density statistics.
+    float sum_density = 0.0f;
+    float min_density = std::numeric_limits<float>::max();
+    float max_density = std::numeric_limits<float>::lowest();
+    std::vector<float> densities;
+    for (const auto &leaf : leaf_children) {
+        float d = leaf->density_;
+        densities.push_back(d);
+        sum_density += d;
+        min_density = std::min(min_density, d);
+        max_density = std::max(max_density, d);
+    }
+    float avg_density = sum_density / static_cast<float>(leaf_children.size());
+
+    // Compute local standard deviation.
+    float variance = 0.0f;
+    for (float d : densities) {
+        variance += (d - avg_density) * (d - avg_density);
+    }
+    variance /= static_cast<float>(leaf_children.size());
+    float sigma = std::sqrt(variance);
+
+    // Compute adaptive tolerance.
+    float adaptive_tolerance = base_tolerance / (1.0f + sigma);
+    // Enforce a stricter tolerance in high-density regions.
+    const float density_threshold = 1.0f; // adjust as necessary
+    if (avg_density > density_threshold) {
+        adaptive_tolerance = std::min(adaptive_tolerance, base_tolerance * 0.5f);
+    }
+
+    // If the range of densities exceeds the adaptive tolerance, do not compress.
+    if ((max_density - min_density) > adaptive_tolerance) return;
+
+    // Compute error to record merge quality.
+    float error_sum = 0.0f;
+    for (const auto &leaf : leaf_children) {
+        error_sum += std::fabs(leaf->density_ - avg_density);
+    }
+    float error_avg = error_sum / static_cast<float>(leaf_children.size());
+    merge_errors.push_back(error_avg);
+
+    // Compress the node.
+    CompressNode(node);
+    merge_count++;
+    changes = true;
+}
+
 // Helper function to recursively count nodes.
 static int CountNodesRecursive(const std::shared_ptr<OctreeNode>& node) {
     if (!node)

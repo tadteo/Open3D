@@ -124,11 +124,10 @@ public:
     int CountNodes() const;
 
     /**
-     * @brief Recursively compresses the octree using a post-order traversal.
+     * @brief Recursively compresses the octree using a standard fixed tolerance.
      *
-     * All internal nodes whose non-null children are leaves
-     * and whose children's densities vary by no more than tolerance
-     * are replaced (compressed) by a merged leaf node.
+     * All internal nodes whose non-null children are leaves and whose children's densities
+     * vary by no more than tolerance are replaced by a merged leaf node.
      *
      * @param tolerance Maximum allowed difference between children densities.
      * @param merge_count (Output) Total number of merges performed.
@@ -136,24 +135,36 @@ public:
      */
     void CompressOctree(float tolerance, int &merge_count, float &avg_error);
 
+    /**
+     * @brief Recursively compresses the octree using an adaptive metric that takes into account the local density variation.
+     *
+     * Regions with higher average density (and hence higher information content) are compressed
+     * less aggressively (i.e. with a lower effective tolerance) to preserve fine details.
+     *
+     * @param base_tolerance Base tolerance value used as the starting point for computing the adaptive tolerance.
+     * @param merge_count (Output) Total number of merges performed.
+     * @param avg_error   (Output) Average error of the merges.
+     */
+    void CompressOctreeAdaptive(float base_tolerance, int &merge_count, float &avg_error);
+
 private:
     /**
-     * @brief Helper for CompressOctree: recursively walk through the tree.
-     *
-     * If every non-null child of an internal node is a CryoEMOctreeLeafNode and their
-     * densities differ by less than tolerance, compress that node using CompressNode.
-     *
-     * @param node          Current node (passed by reference so that pointer update is effective).
-     * @param tolerance     The allowed tolerance.
-     * @param merge_count   (Output) Merge counter.
-     * @param merge_errors  (Output) A vector holding merge error values.
-     * @param changes       (Output) Set to true if any merge occurs during this pass.
+     * @brief Helper for CompressOctree: recursively compress the tree with fixed tolerance.
      */
     void CompressOctreeRecursive(std::shared_ptr<OctreeNode> &node,
                                  float tolerance,
                                  int &merge_count,
                                  std::vector<float> &merge_errors,
                                  bool &changes);
+
+    /**
+     * @brief Helper for CompressOctreeAdaptive: recursively compress the tree using an adaptive tolerance based on local statistics.
+     */
+    void CompressOctreeRecursiveAdaptive(std::shared_ptr<OctreeNode> &node,
+                                          float base_tolerance,
+                                          int &merge_count,
+                                          std::vector<float> &merge_errors,
+                                          bool &changes);
 
     /**
      * @brief Recursively aggregates data in the subtree starting from the given node.
