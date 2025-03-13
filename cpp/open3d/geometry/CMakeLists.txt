@@ -1,4 +1,13 @@
+# Ensure Pybind11 is found
+find_package(pybind11 CONFIG REQUIRED)
+
+# Include Pybind11 headers
+include_directories(${pybind11_INCLUDE_DIRS})
+
 open3d_ispc_add_library(geometry OBJECT)
+
+# Link Pybind11 to the geometry library
+target_link_libraries(geometry PRIVATE pybind11::module)
 
 target_sources(geometry PRIVATE
     BoundingVolume.cpp

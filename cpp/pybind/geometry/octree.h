@@ -29,8 +29,8 @@ public:
         PYBIND11_OVERLOAD_PURE(bool, OctreeLeafNodeBase, other);
     };
 
-    std::shared_ptr<OctreeLeafNode> Clone() const override {
-        PYBIND11_OVERLOAD_PURE(std::shared_ptr<OctreeLeafNode>,
+    std::shared_ptr<OctreeNode> Clone() const override {
+        PYBIND11_OVERLOAD_PURE(std::shared_ptr<OctreeNode>,
                                OctreeLeafNodeBase, );
     };
 };

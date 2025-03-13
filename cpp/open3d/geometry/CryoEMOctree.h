@@ -4,9 +4,13 @@
 #include <memory>
 #include <vector>
 #include <functional>
+#include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
 
+namespace py = pybind11;
 namespace open3d {
 namespace geometry {
+
 
 /**
  * @brief A derived octree leaf node class that stores Cryo-EM specific data.
@@ -25,7 +29,7 @@ public:
      * @brief Creates a deep copy of the leaf node.
      * @return A shared pointer to the cloned OctreeLeafNode.
      */
-    std::shared_ptr<OctreeLeafNode> Clone() const override;
+    std::shared_ptr<OctreeNode> Clone() const override;
 
     /**
      * @brief Serializes the node data to a JSON value.
@@ -52,8 +56,7 @@ public:
     static std::function<std::shared_ptr<OctreeLeafNode>()> GetInitFunction();
 
     /// Returns a lambda that updates a CryoEMOctreeLeafNode with the given density.
-    static std::function<void(std::shared_ptr<OctreeLeafNode>)>
-    GetUpdateFunction(float density);
+    static std::function<void(std::shared_ptr<OctreeLeafNode>)> GetUpdateFunction(float density);
 
     // Cryo-EM specific data field.
     float density_;
@@ -81,10 +84,17 @@ public:
      * @brief Creates a deep copy of the internal node.
      * @return A shared pointer to the cloned OctreeInternalNode.
      */
-    std::shared_ptr<OctreeInternalNode> Clone() const;
+    std::shared_ptr<OctreeNode> Clone() const override;
 
     // Aggregated Cryo-EM specific data field.
     float density_;
+
+    // Add these function declarations
+    static std::function<std::shared_ptr<open3d::geometry::OctreeInternalNode>()> 
+    GetInitFunction();
+    
+    static std::function<void(std::shared_ptr<open3d::geometry::OctreeInternalNode>)> 
+    GetUpdateFunction(float density);
 };
 
 /**
@@ -109,6 +119,27 @@ public:
      * @param density Density value at the point.
      */
     void InsertDensityPoint(const Eigen::Vector3d &point, float density);
+
+    /**
+     * @brief Inserts a subtree into the current octree at a given point.
+     * @param point The 3D point to be inserted.
+     * @param subtree A shared pointer to the subtree to be inserted.
+     */
+    void InsertCryoEMSubtree(const Eigen::Vector3d &point,
+                            std::shared_ptr<CryoEMOctree> subtree);
+
+    /**
+     * @brief Converts a voxel map to an octree.
+     * @param density_array The voxel map to convert.
+     * @param max_depth Maximum depth of the octree.
+     * @param target_tasks Number of tasks to use for parallel processing.
+     * @param map_offset The offset of the map from the origin of the octree.
+     */
+    void ConvertVoxelMapToOctree(
+        const py::array_t<float>& density_array,
+        double map_size,
+        int target_tasks = 1
+        );
 
     void CompressNode(std::shared_ptr<OctreeNode>& node);
 
@@ -147,9 +178,32 @@ public:
      */
     void CompressOctreeAdaptive(float base_tolerance, int &merge_count, float &avg_error);
 
+    // Override the base class method to handle CryoEM specific leaf nodes
+    std::shared_ptr<OctreeLeafNode> ConvertInternalToLeaf(
+            const std::shared_ptr<OctreeInternalNode>& internal) override;
+
+    // Explicit assignment operator
+    CryoEMOctree& operator=(const CryoEMOctree& other) {
+        if (this != &other) {
+            Octree::operator=(other); // Call base class assignment
+            // Copy CryoEMOctree-specific members here if any
+        }
+        return *this;
+    }
+
+    struct Subregion {
+        Eigen::Vector3i origin_index;
+        int side_length;
+        int depth;
+    };
+
+    struct Subtrees {
+        Subregion region;
+        std::shared_ptr<CryoEMOctree> subtree;
+    };
+
 private:
     /**
-     * @brief Helper for CompressOctree: recursively compress the tree with fixed tolerance.
      */
     void CompressOctreeRecursive(std::shared_ptr<OctreeNode> &node,
                                  float tolerance,
@@ -171,7 +225,9 @@ private:
      * @param node The root node of the subtree.
      */
     void AggregateSubtree(std::shared_ptr<OctreeNode> node);
+
 };
+
 
 } // namespace geometry
 } // namespace open3d

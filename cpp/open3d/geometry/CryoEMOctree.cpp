@@ -1,14 +1,26 @@
 #include "open3d/geometry/CryoEMOctree.h"
+#include "open3d/geometry/VoxelGrid.h"
+#include <tbb/parallel_for.h>
+#include <tbb/parallel_reduce.h>
+#include <tbb/blocked_range.h>
 #include <cmath>           // for std::fabs
 #include <json/json.h>     // For JSON handling (if needed)
 #include "open3d/utility/Logging.h"
 #include <numeric>  // for std::accumulate
 #include <limits>   // for std::numeric_limits
+#include <chrono>   // for std::chrono
+#include <queue>
+#include <unordered_map>
+#include <sstream>
+#include <iomanip>
+
+#include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
 
 /*
  * This file contains the implementation of the CryoEMOctree and its associated nodes.
  */
-
+namespace py = pybind11;
 namespace open3d {
 namespace geometry {
 
@@ -75,7 +87,7 @@ void CryoEMOctree::CompressNode(std::shared_ptr<OctreeNode>& node) {
 CryoEMOctreeLeafNode::CryoEMOctreeLeafNode() 
     : density_(0.0f) {}
 
-std::shared_ptr<OctreeLeafNode> CryoEMOctreeLeafNode::Clone() const {
+std::shared_ptr<OctreeNode> CryoEMOctreeLeafNode::Clone() const {
     auto node = std::make_shared<CryoEMOctreeLeafNode>();
     node->density_ = density_;
     return node;
@@ -101,7 +113,7 @@ bool CryoEMOctreeLeafNode::operator==(const OctreeLeafNode& other) const {
     return (std::fabs(density_ - other_leaf->density_) < 1e-6f);
 }
 
-std::function<std::shared_ptr<OctreeLeafNode>()> 
+std::function<std::shared_ptr<OctreeLeafNode>()>
 CryoEMOctreeLeafNode::GetInitFunction() {
     return []() -> std::shared_ptr<OctreeLeafNode> {
         return std::make_shared<CryoEMOctreeLeafNode>();
@@ -111,10 +123,10 @@ CryoEMOctreeLeafNode::GetInitFunction() {
 std::function<void(std::shared_ptr<OctreeLeafNode>)>
 CryoEMOctreeLeafNode::GetUpdateFunction(float density) {
     return [density](std::shared_ptr<OctreeLeafNode> node) -> void {
-        if (auto cryo_node = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(node)) {
-            cryo_node->density_ = density;
+        if (auto leaf = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(node)) {
+            leaf->density_ = density;  // Assuming density_ is a member of CryoEMOctreeLeafNode
         } else {
-            utility::LogError("Internal error: node must be CryoEMOctreeLeafNode");
+            utility::LogError("Internal error: leaf node must be CryoEMOctreeLeafNode");
         }
     };
 }
@@ -147,10 +159,38 @@ void CryoEMOctreeInternalNode::AggregateChildren() {
     }
 }
 
-std::shared_ptr<OctreeInternalNode> CryoEMOctreeInternalNode::Clone() const {
+std::shared_ptr<OctreeNode> CryoEMOctreeInternalNode::Clone() const {
     auto node = std::make_shared<CryoEMOctreeInternalNode>();
+    // Copy relevant data
     node->density_ = density_;
+    
+    // Clone children
+    for (size_t i = 0; i < children_.size(); ++i) {
+        if (children_[i]) {
+            node->children_[i] = children_[i]->Clone();
+        }
+    }
     return node;
+}
+
+std::function<std::shared_ptr<OctreeInternalNode>()>
+CryoEMOctreeInternalNode::GetInitFunction() {
+    return []() -> std::shared_ptr<OctreeInternalNode> {
+        return std::make_shared<CryoEMOctreeInternalNode>();
+    };
+}
+
+std::function<void(std::shared_ptr<OctreeInternalNode>)>
+CryoEMOctreeInternalNode::GetUpdateFunction(float density) {
+    return [density](std::shared_ptr<OctreeInternalNode> node) -> void {
+        if (auto internal = std::dynamic_pointer_cast<CryoEMOctreeInternalNode>(node)) {
+            // Update internal node with the density or other information if needed
+            internal->density_ = density;  // Assuming density_ exists in the internal node
+            // If you need to aggregate children data, do it here
+        } else {
+            utility::LogError("Internal error: internal node must be CryoEMOctreeInternalNode");
+        }
+    };
 }
 
 //==============================================================================
@@ -163,32 +203,77 @@ CryoEMOctree::CryoEMOctree(int max_depth, const Eigen::Vector3d &origin, double 
 }
 
 void CryoEMOctree::InsertDensityPoint(const Eigen::Vector3d &point, float density) {
-    // Define an initializer for Cryo‑EM leaf nodes.
-    auto cryoLeafInit = []() -> std::shared_ptr<OctreeLeafNode> {
-        return std::make_shared<CryoEMOctreeLeafNode>();
-    };
-
-    // Define an updater for Cryo‑EM leaf nodes that stores the density.
-    auto cryoLeafUpdate = [density](std::shared_ptr<OctreeLeafNode> node) {
-        if (auto cryoLeaf = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(node)) {
-            cryoLeaf->density_ = density;
-        } else {
-            utility::LogError("InsertDensityPoint: Node is not a CryoEMOctreeLeafNode.");
-        }
-    };
-
-    // Define an initializer for Cryo‑EM internal nodes.
-    auto cryoInternalInit = []() -> std::shared_ptr<OctreeInternalNode> {
-        return std::make_shared<CryoEMOctreeInternalNode>();
-    };
-
-    // Define an updater for Cryo‑EM internal nodes (if needed).
-    auto cryoInternalUpdate = [](std::shared_ptr<OctreeInternalNode> node) {
-        // Optionally update aggregated parameters.
-    };
-
-    // Use the base class InsertPoint method with our lambdas.
+    // Get the initialization and update functions for CryoEM-specific nodes
+    auto cryoLeafInit = CryoEMOctreeLeafNode::GetInitFunction();
+    auto cryoLeafUpdate = CryoEMOctreeLeafNode::GetUpdateFunction(density);
+    auto cryoInternalInit = CryoEMOctreeInternalNode::GetInitFunction();
+    auto cryoInternalUpdate = CryoEMOctreeInternalNode::GetUpdateFunction(density);
+    
+    // Use the proper version of IsPointInBound with all three arguments
+    bool in_bounds = Octree::IsPointInBound(point, this->origin_, this->size_);
+    if (!in_bounds) {
+        utility::LogWarning("Point {} is outside octree bounds", point.transpose());
+        return;
+    }
+    
+    // Call the base class InsertPoint with proper function types
     this->InsertPoint(point, cryoLeafInit, cryoLeafUpdate, cryoInternalInit, cryoInternalUpdate);
+}
+
+void CryoEMOctree::InsertCryoEMSubtree(const Eigen::Vector3d &point,
+                                        std::shared_ptr<CryoEMOctree> subtree) {
+    if (!Octree::IsPointInBound(point, this->origin_, this->size_)) {
+        utility::LogWarning("Insertion point {} is outside octree bounds", point.transpose());
+        return;
+    }
+
+    // Prepare the lambda functions needed by the base InsertSubtree.
+    // Here we use the CryoEM-specific initialization and update functions.
+    auto cryoLeafInit = CryoEMOctreeLeafNode::GetInitFunction();
+    auto cryoLeafUpdate = CryoEMOctreeLeafNode::GetUpdateFunction(0.0f); // Use 0.0f or an appropriate default
+    auto cryoInternalInit = CryoEMOctreeInternalNode::GetInitFunction();
+    auto cryoInternalUpdate = CryoEMOctreeInternalNode::GetUpdateFunction(0.0f);
+    
+    // Correct the call: pass the point, the entire subtree, and the four required function callbacks.
+    this->InsertSubtree(point, subtree, cryoLeafInit, cryoLeafUpdate, cryoInternalInit, cryoInternalUpdate);
+}
+
+
+/**
+ * @brief Helper function to recursively merge two CryoEMOctreeInternalNodes.
+ * 
+ * This function merges child nodes from src into dst, ensuring that data 
+ * is combined correctly.
+ */
+void MergeInternalNodes(std::shared_ptr<CryoEMOctreeInternalNode> dst,
+                        std::shared_ptr<CryoEMOctreeInternalNode> src) {
+    for (size_t i = 0; i < 8; i++) {
+        if (src->children_[i]) {
+            if (!dst->children_[i]) {
+                // If the destination node does not have this child, copy it directly
+                dst->children_[i] = src->children_[i];
+            } else {
+                // If both have a child at this position, recursively merge them
+                auto src_internal = std::dynamic_pointer_cast<CryoEMOctreeInternalNode>(src->children_[i]);
+                auto dst_internal = std::dynamic_pointer_cast<CryoEMOctreeInternalNode>(dst->children_[i]);
+
+                if (src_internal && dst_internal) {
+                    MergeInternalNodes(dst_internal, src_internal);
+                } else {
+                    // Conflict: Keep one (e.g., max density or average)
+                    auto src_leaf = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(src->children_[i]);
+                    auto dst_leaf = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(dst->children_[i]);
+
+                    if (src_leaf && dst_leaf) {
+                        // Average density value (or choose max if needed)
+                        dst_leaf->density_ = (dst_leaf->density_ + src_leaf->density_) / 2.0f;
+                    } else if (src_leaf) {
+                        dst->children_[i] = src_leaf;
+                    }
+                }
+            }
+        }
+    }
 }
 
 void CryoEMOctree::SplitTreeGeneric() {
@@ -414,7 +499,248 @@ static int CountNodesRecursive(const std::shared_ptr<OctreeNode>& node) {
 }
 
 int CryoEMOctree::CountNodes() const {
-    return CountNodesRecursive(root_node_);
+    int count = CountNodesRecursive(root_node_);
+    // Print node structure details
+    utility::LogInfo("Root node exists: {}", root_node_ != nullptr);
+    if (root_node_) {
+        auto internal = std::dynamic_pointer_cast<OctreeInternalNode>(root_node_);
+        if (internal) {
+            int child_count = 0;
+            for (const auto& child : internal->children_) {
+                if (child) child_count++;
+            }
+            utility::LogInfo("Root is internal with {} non-null children", child_count);
+        }
+    }
+    return count;
+}
+
+
+// A simple hash key creator based on a vector's coordinates rounded to 6 decimals.
+std::string CreatePosKey(const Eigen::Vector3d &pos) {
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(6)
+       << pos.x() << "_" << pos.y() << "_" << pos.z();
+    return ss.str();
+}
+
+// Helper function: recursively traverse the octree and, for each leaf, compute an approximate center
+// and add it to a map for uniqueness checking.
+void CollectLeafPositions(const std::shared_ptr<OctreeNode>& node,
+                          const Eigen::Vector3d &node_origin,
+                          double node_size,
+                          std::unordered_map<std::string, int>& pos_counts) {
+    if (!node) return;
+    // Check if this is a CryoEM leaf node. (You may also want to include other leaf types as needed.)
+    auto leaf = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(node);
+    if (leaf) {
+        // Compute an approximate cell center.
+        Eigen::Vector3d center = node_origin + Eigen::Vector3d::Constant(node_size / 2.0);
+        std::string key = CreatePosKey(center);
+        pos_counts[key]++;
+    } else {
+        // For internal nodes, assume the node is an octree internal node.
+        auto internal = std::dynamic_pointer_cast<OctreeInternalNode>(node);
+        if (!internal) return;
+        double child_size = node_size / 2.0;
+        // Loop through the eight children. The common indexing for octants can be used:
+        // Bit 0: +X, Bit 1: +Y, Bit 2: +Z.
+        for (size_t i = 0; i < 8; ++i) {
+            // Compute the corresponding offset for each child.
+            Eigen::Vector3d offset(
+                (i & 1) ? child_size : 0,
+                (i & 2) ? child_size : 0,
+                (i & 4) ? child_size : 0
+            );
+            // For each valid child, compute its origin and traverse recursively.
+            if (i < internal->children_.size() && internal->children_[i]) {
+                CollectLeafPositions(internal->children_[i], node_origin + offset, child_size, pos_counts);
+            }
+        }
+    }
+}
+
+void CryoEMOctree::ConvertVoxelMapToOctree(
+    const py::array_t<float>& density_array,
+    double map_size,
+    int target_tasks
+    ) {
+
+    // Get buffer and shape information from numpy array
+    py::buffer_info buf = density_array.request();
+    if (buf.ndim != 3) {
+        utility::LogError("Expected 3D numpy array, but got {}D array", buf.ndim);
+    }
+    
+    // int max_depth = this->max_depth_;
+
+    // Extract shape information
+    size_t nx = buf.shape[0];
+    size_t ny = buf.shape[1];
+    size_t nz = buf.shape[2];
+    float* data_ptr = static_cast<float*>(buf.ptr);
+
+    // Print the shape of the density array
+    utility::LogInfo("Density array shape: {}x{}x{}", nx, ny, nz);
+
+    // Compute voxel sizes in physical units (it should be the same for all the leaf nodes)
+    double voxelSizeX = map_size / static_cast<double>(nx);
+    double voxelSizeY = map_size / static_cast<double>(ny);
+    double voxelSizeZ = map_size / static_cast<double>(nz);
+
+    // Define grid size based on dimensions
+    // typedef Eigen::Matrix<long double, 3, 1> Vector3ld;
+    Eigen::Vector3d grid_size(nx, ny, nz);
+    
+    // Step 1: Use the existing origin and size
+    Eigen::Vector3d map_origin = this->origin_;
+
+    //Printing the origin and size
+    utility::LogInfo("The origin of the map is: {}", map_origin.transpose());
+    utility::LogInfo("The size of the map is: {}", map_size);
+    utility::LogInfo("The voxel size of the map is: {} {} {}", voxelSizeX, voxelSizeY, voxelSizeZ);
+    utility::LogInfo("The origin of the octree is: {}", this->origin_.transpose());
+    utility::LogInfo("The size of the octree is: {}", this->size_);
+
+
+
+    // --- Step 2: Subdivide the map into subtrees that align with the voxel grid ---
+    int depthOfSubdivisions = std::log2(target_tasks)/std::log2(8);
+    int numSubdivisions = std::pow(2, depthOfSubdivisions);
+    int depthOfSubtrees = this->max_depth_ - depthOfSubdivisions;
+    double subregion_size_length = this->size_ / numSubdivisions; 
+    utility::LogInfo("numSubDivisions: {}, target_tasks: {}, that means the depth of the subtrees will be {}",
+            numSubdivisions, target_tasks, depthOfSubtrees);
+
+    
+    
+    utility::LogInfo("Subdividing map into {} subregions per axis, each with approximately {} voxels per side", 
+                    numSubdivisions, subregion_size_length);
+
+    // Create a vector to hold all the sub octrees.
+    std::vector<std::shared_ptr<CryoEMOctree>> subregions_octree;
+    for (int i = 0; i < numSubdivisions; ++i) {
+        for (int j = 0; j < numSubdivisions; ++j) {
+            for (int k = 0; k < numSubdivisions; ++k) {
+                // Compute the origin phisical position for this subtree.
+                Eigen::Vector3d origin(map_origin.x() + i * subregion_size_length, 
+                                             map_origin.y() + j * subregion_size_length, 
+                                             map_origin.z() + k * subregion_size_length);
+                utility::LogInfo("Creating subtree at depth {} with origin {} and size {}",
+                        depthOfSubtrees, 
+                        origin.cast<double>().transpose(),
+                        subregion_size_length);
+
+                subregions_octree.push_back(std::make_shared<CryoEMOctree>(
+                                    depthOfSubtrees, 
+                                    origin,
+                                    subregion_size_length));
+            }
+        }
+    }
+
+    // Start subdivision over the entire domain.
+    std::atomic<size_t> points_inserted(0);
+    
+    // Step 3: Parallel voxel insertion
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    // Now use the fixed subtrees vector size for parallel voxel insertion.
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, subregions_octree.size()),
+        [&](const tbb::blocked_range<size_t> &range) {
+            for (size_t i = range.begin(); i < range.end(); i++) {
+                //Get the origin index of the subtree
+                Eigen::Vector3i subtree_origin_index = (subregions_octree[i]->origin_ / voxelSizeX).cast<int>();
+                int side_length = static_cast<int>(subregions_octree[i]->size_ / voxelSizeX);
+
+                for (int x = subtree_origin_index.x(); x < subtree_origin_index.x() + side_length; x++) {
+                    for (int y = subtree_origin_index.y(); y < subtree_origin_index.y() + side_length; y++) {
+                        for (int z = subtree_origin_index.z(); z < subtree_origin_index.z() + side_length; z++) {
+                            // Check if the index is within the bounds of the density array
+                            if (x >= 0 && x < static_cast<int>(nx) &&
+                                y >= 0 && y < static_cast<int>(ny) &&
+                                z >= 0 && z < static_cast<int>(nz)) {
+                                float density = data_ptr[x * ny * nz + y * nz + z];
+                                double pos_x = x * voxelSizeX;
+                                double pos_y = y * voxelSizeY;
+                                double pos_z = z * voxelSizeZ;
+                                Eigen::Vector3d pos(pos_x, pos_y, pos_z);
+                                points_inserted++;
+                                subregions_octree[i]->InsertDensityPoint(pos, density);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+    auto end_time = std::chrono::high_resolution_clock::now();    
+    auto merge_duration = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
+    utility::LogInfo("Voxel insertion took {} seconds", merge_duration);
+    utility::LogInfo("Points actually inserted: {}", points_inserted.load());
+    
+
+    // DEBUGGING
+    //Count sum of all nodes in all subtrees
+    utility::LogInfo("Counting nodes in all subtrees");
+    int sum_nodes = 0;
+    for (auto &subtree_data : subregions_octree) {
+        sum_nodes += subtree_data->CountNodes();
+    }
+    utility::LogInfo("Sum of all nodes in all subtrees: {}", sum_nodes);
+
+    // Check for duplicate leaf node positions
+    // std::unordered_map<std::string, int> position_counts_0;
+    // for (auto &subtree_data : subregions_octree) {
+    //     // For each subtree, traverse from its root node.
+    //     CollectLeafPositions(subtree_data->root_node_, subtree_data->origin_, subtree_data->size_, position_counts_0);
+    // }
+
+    // // Now, count duplicates.
+    // int duplicate_positions = 0;
+    // for (const auto &pair : position_counts_0) {
+    //     if (pair.second > 1) {
+    //         duplicate_positions += (pair.second - 1);
+    //     }
+    // }
+    // utility::LogInfo("Total duplicate leaf node positions found (should be 0): {}", duplicate_positions);
+
+    // END DEBUGGING
+
+    start_time = std::chrono::high_resolution_clock::now();
+
+    // Step 4: Sequential merging of sub-octrees into a correct hierarchical structure
+    auto merge_start_time = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < subregions_octree.size(); i++) {
+        this->InsertCryoEMSubtree(subregions_octree[i]->origin_, subregions_octree[i]);
+    }
+    auto merge_end_time = std::chrono::high_resolution_clock::now();
+    merge_duration = std::chrono::duration_cast<std::chrono::seconds>(merge_end_time - merge_start_time).count();
+    open3d::utility::LogInfo("Tree reconstruction took {} seconds", merge_duration);
+
+    //count nodes after merging
+    int node_count = this->CountNodes();
+    utility::LogInfo("Node count after tree reconstruction: {}", node_count);
+}
+
+std::shared_ptr<OctreeLeafNode> CryoEMOctree::ConvertInternalToLeaf(
+        const std::shared_ptr<OctreeInternalNode>& internal) {
+    if (!internal->children_.empty()) {
+        // Look for the first non-null child
+        for (const auto& child : internal->children_) {
+            if (child) {
+                // Try to cast it to a CryoEMOctreeLeafNode
+                auto leaf = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(child);
+                if (leaf) {
+                    // Clone and return the leaf
+                    return std::dynamic_pointer_cast<OctreeLeafNode>(leaf->Clone());
+                }
+            }
+        }
+    }
+    
+    // If we couldn't find a valid child to clone, create a new default leaf node
+    return std::make_shared<CryoEMOctreeLeafNode>();
 }
 
 } // namespace geometry

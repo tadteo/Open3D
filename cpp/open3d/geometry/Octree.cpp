@@ -213,7 +213,7 @@ OctreeColorLeafNode::GetUpdateFunction(const Eigen::Vector3d& color) {
     };
 }
 
-std::shared_ptr<OctreeLeafNode> OctreeColorLeafNode::Clone() const {
+std::shared_ptr<OctreeNode> OctreeColorLeafNode::Clone() const {
     auto cloned_node = std::make_shared<OctreeColorLeafNode>();
     cloned_node->color_ = color_;
     return cloned_node;
@@ -274,7 +274,7 @@ OctreePointColorLeafNode::GetUpdateFunction(size_t idx,
     };
 }
 
-std::shared_ptr<OctreeLeafNode> OctreePointColorLeafNode::Clone() const {
+std::shared_ptr<OctreeNode> OctreePointColorLeafNode::Clone() const {
     auto cloned_node = std::make_shared<OctreePointColorLeafNode>();
     cloned_node->color_ = color_;
     cloned_node->indices_ = indices_;
@@ -658,6 +658,92 @@ void Octree::InsertPointRecurse(
     }
 }
 
+// In Octree.cpp, define a helper recursive function:
+void Octree::InsertSubtreeRecurse(
+    std::shared_ptr<OctreeNode> &node,
+    const std::shared_ptr<OctreeNodeInfo> &node_info,
+    const Eigen::Vector3d &point,
+    const std::shared_ptr<Octree> &subtree,
+    const std::function<std::shared_ptr<OctreeLeafNode>()> &fl_init,
+    const std::function<void(std::shared_ptr<OctreeLeafNode>)> &fl_merge,
+    const std::function<std::shared_ptr<OctreeInternalNode>()> &fi_init,
+    const std::function<void(std::shared_ptr<OctreeInternalNode>)> &fi_update) {
+    
+    // If the insertion point is not within this node's bounds, do nothing.
+    if (!IsPointInBound(point, node_info->origin_, node_info->size_))
+        return;
+
+    if (node_info->origin_ == subtree->origin_ && node_info->size_ == subtree->size_){
+        node = subtree->root_node_;
+        utility::LogInfo("Substituted node at point {} with subtree's root pointer.",
+                           node_info->origin_.transpose());
+        return;
+    }
+    
+    // Otherwise, we are in an internal node.
+    if (auto internal_node = std::dynamic_pointer_cast<OctreeInternalNode>(node)) {
+        // Update the internal node (if needed)
+        fi_update(internal_node);
+        
+        // Get info for the child that would contain the insertion point.
+        std::shared_ptr<OctreeNodeInfo> child_info =
+            internal_node->GetInsertionNodeInfo(node_info, point);
+        size_t child_index = child_info->child_index_;
+        
+        // If the corresponding child does not exist, create it.
+        if (internal_node->children_[child_index] == nullptr) {
+            if (node_info->depth_ == max_depth_ - 1) {
+                internal_node->children_[child_index] = fl_init();
+            } else {
+                internal_node->children_[child_index] = fi_init();
+            }
+        }
+        // Recurse into the child.
+        InsertSubtreeRecurse(internal_node->children_[child_index],
+                             child_info, point, subtree,
+                             fl_init, fl_merge, fi_init, fi_update);
+    } else {
+        utility::LogError("Internal error: internal node must be OctreeInternalNode");
+    }
+}
+
+void Octree::InsertSubtree(
+    const Eigen::Vector3d &point,
+    const std::shared_ptr<Octree> &subtree,
+    const std::function<std::shared_ptr<OctreeLeafNode>()> &fl_init,
+    const std::function<void(std::shared_ptr<OctreeLeafNode>)> &fl_merge,
+    const std::function<std::shared_ptr<OctreeInternalNode>()> &fi_init,
+    const std::function<void(std::shared_ptr<OctreeInternalNode>)> &fi_update) {
+    
+    if (!IsPointInBound(point, origin_, size_)) {
+        utility::LogWarning("Insertion point {} is outside octree bounds", point.transpose());
+        return;
+    }
+    if (!subtree || !subtree->root_node_) {
+        utility::LogWarning("Subtree is empty.");
+        return;
+    }
+    
+    // If no custom internal node init/update functions are provided, use the default ones.
+    auto _fi_init = fi_init;
+    if (_fi_init == nullptr) {
+        _fi_init = OctreeInternalNode::GetInitFunction();
+    }
+    auto _fi_update = fi_update;
+    if (_fi_update == nullptr) {
+        _fi_update = OctreeInternalNode::GetUpdateFunction();
+    }
+    
+    // Create a node info structure for the root.
+    auto root_info = std::make_shared<OctreeNodeInfo>(origin_, size_, 0, 0);
+    
+    // Recursively merge the subtree's root node into the current tree.
+    InsertSubtreeRecurse(root_node_, root_info, point, subtree,
+                           fl_init, fl_merge, _fi_init, _fi_update);
+    
+    utility::LogInfo("Subtree inserted at point: {}", point.transpose());
+}
+
 bool Octree::IsPointInBound(const Eigen::Vector3d& point,
                             const Eigen::Vector3d& origin,
                             const double& size) {
@@ -812,7 +898,8 @@ std::shared_ptr<OctreeLeafNode> Octree::ConvertInternalToLeaf(
         auto child = internal->children_.front();
         auto leaf = std::dynamic_pointer_cast<OctreeLeafNode>(child);
         if (leaf) {
-            return leaf->Clone();
+            // Need to cast back to OctreeLeafNode since Clone() returns OctreeNode
+            return std::dynamic_pointer_cast<OctreeLeafNode>(leaf->Clone());
         }
     }
     return nullptr;
@@ -832,6 +919,26 @@ std::shared_ptr<OctreeNode> Octree::SplitLeafNode(
         newInternal->children_[idx] = leaf->Clone();
     }
     return newInternal;
+}
+
+std::shared_ptr<OctreeNode> OctreeInternalNode::Clone() const {
+    auto cloned_node = std::make_shared<OctreeInternalNode>();
+    // Resize the children vector of the cloned node to exactly the same size.
+    cloned_node->children_.resize(children_.size());
+    for (size_t i = 0; i < children_.size(); ++i) {
+        if (children_[i]) {
+            cloned_node->children_[i] = children_[i]->Clone();
+        } else {
+            cloned_node->children_[i] = nullptr;
+        }
+    }
+    return cloned_node;
+}
+
+std::shared_ptr<OctreeNode> OctreeLeafNode::Clone() const {
+    // This should be implemented by derived classes
+    // Return a default implementation if needed
+    return nullptr;
 }
 
 }  // namespace geometry

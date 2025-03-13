@@ -58,6 +58,8 @@ configure_file("${PROJECT_SOURCE_DIR}/cpp/open3d/Open3DConfig.h.in"
 
 
 add_library(Open3D)
+target_link_libraries(Open3D PRIVATE pybind11::module)
+find_package(pybind11 CONFIG REQUIRED)
 
 add_subdirectory(camera)
 add_subdirectory(core)
@@ -159,6 +161,10 @@ write_basic_package_version_file("${PROJECT_BINARY_DIR}/Open3DConfigVersion.cmak
                                  VERSION ${PROJECT_VERSION}
                                  COMPATIBILITY ExactVersion)
 
+# pybind11
+find_package(pybind11 REQUIRED)
+
+
 # Installation
 install(TARGETS Open3D EXPORT Open3DTargets
         RUNTIME DESTINATION ${Open3D_INSTALL_BIN_DIR}
@@ -217,3 +223,4 @@ endif()
 # Export GUI_RESOURCE_FILES to parent CMake context (cpp/open3d/)
 set(GUI_RESOURCE_FILES ${GUI_RESOURCE_FILES} PARENT_SCOPE)
 set(GUI_RESOURCE_DIR ${GUI_RESOURCE_DIR} PARENT_SCOPE)
+

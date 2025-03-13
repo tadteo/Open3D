@@ -1,6 +1,8 @@
 #include "open3d/geometry/CryoEMOctree.h"
+#include "open3d/geometry/VoxelGrid.h"
 #include "pybind/docstring.h"
 #include "pybind/geometry/geometry_trampoline.h"
+#include "pybind/open3d_pybind.h"
 
 namespace open3d {
 namespace geometry {
@@ -39,6 +41,9 @@ void pybind_cryoem_octree(py::module &m) {
              &CryoEMOctree::InsertDensityPoint,
              "Insert a point with density.",
              "point"_a, "density"_a)
+        .def("insert_cryoem_subtree", &CryoEMOctree::InsertCryoEMSubtree,
+             "Insert a CryoEM subtree",
+             "point"_a, "subtree"_a)
         .def("compress_node", &CryoEMOctree::CompressNode,
           "Compress an internal Cryo-EM node in place if eligible. "
           "The function updates the node pointer with a merged leaf node if compression applies.",
@@ -67,7 +72,13 @@ void pybind_cryoem_octree(py::module &m) {
                    std::to_string(oct.origin_(1)) + ", " +
                    std::to_string(oct.origin_(2)) + "], size=" +
                    std::to_string(oct.size_);
-        });
+        })
+        .def("convert_voxel_map_to_octree",
+            &CryoEMOctree::ConvertVoxelMapToOctree,
+            "Convert a VoxelGrid to a CryoEMOctree using parallel processing.",
+            py::arg("voxel_grid"),
+            py::arg("map_size"),
+            py::arg("target_tasks"));
 }
 
 }  // namespace geometry

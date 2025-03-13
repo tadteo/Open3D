@@ -17,6 +17,7 @@
 namespace open3d {
 namespace geometry {
 
+
 class PointCloud;
 class VoxelGrid;
 
@@ -77,6 +78,8 @@ public:
     /// Factory function to construct an OctreeNode by parsing the json value.
     static std::shared_ptr<OctreeNode> ConstructFromJsonValue(
             const Json::Value& value);
+
+    virtual std::shared_ptr<OctreeNode> Clone() const = 0;
 };
 
 /// \class OctreeInternalNode
@@ -121,6 +124,8 @@ public:
 
     bool ConvertToJsonValue(Json::Value& value) const override;
     bool ConvertFromJsonValue(const Json::Value& value) override;
+
+    virtual std::shared_ptr<OctreeNode> Clone() const override;
 
 public:
     /// Use vector instead of C-array for Pybind11, otherwise, need to define
@@ -168,8 +173,7 @@ public:
 class OctreeLeafNode : public OctreeNode {
 public:
     virtual bool operator==(const OctreeLeafNode& other) const = 0;
-    /// Clone this OctreeLeafNode.
-    virtual std::shared_ptr<OctreeLeafNode> Clone() const = 0;
+    virtual std::shared_ptr<OctreeNode> Clone() const override = 0;
 };
 
 /// \class OctreeColorLeafNode
@@ -180,7 +184,7 @@ public:
     bool operator==(const OctreeLeafNode& other) const override;
 
     /// Clone this OctreeLeafNode.
-    std::shared_ptr<OctreeLeafNode> Clone() const override;
+    std::shared_ptr<OctreeNode> Clone() const override;
 
     /// \brief Get lambda function for initializing OctreeLeafNode.
     ///
@@ -213,7 +217,7 @@ class OctreePointColorLeafNode : public OctreeColorLeafNode {
 public:
     bool operator==(const OctreeLeafNode& other) const override;
     /// Clone this OctreeLeafNode.
-    std::shared_ptr<OctreeLeafNode> Clone() const override;
+    std::shared_ptr<OctreeNode> Clone() const override;
 
     /// \brief Get lambda function for initializing OctreeLeafNode.
     ///
@@ -350,6 +354,29 @@ public:
             const std::function<void(std::shared_ptr<OctreeInternalNode>)>&
                     fi_update = nullptr);
 
+    /// \brief Insert a subtree into the octree.
+    /// \param point The 3D point to be inserted.
+    /// \param subtree The subtree to be inserted.
+    /// \param fl_init Initialization fcn used to create new leaf node
+    /// (if needed) associated with the point.
+    /// \param fl_merge Update fcn used to update the leaf node
+    /// associated with the point.
+    /// \param fi_init Initialize fcn used to create a new internal node
+    /// (if needed) which is an ancestor of the point's leaf node. If omitted,
+    /// the default OctreeInternalNode function is used.
+    /// \param fi_update Update fcn used to update the internal node
+    /// which is an ancestor of the point's leaf node. If omitted, the default
+    /// OctreeInternalNode function is used.
+    void InsertSubtree(
+        const Eigen::Vector3d &point,
+        const std::shared_ptr<Octree> &subtree,
+        const std::function<std::shared_ptr<OctreeLeafNode>()> &fl_init,
+        // fl_merge is a lambda that “merges” an existing leaf with data from the subtree.
+        const std::function<void(std::shared_ptr<OctreeLeafNode>)> &fl_merge,
+        const std::function<std::shared_ptr<OctreeInternalNode>()> &fi_init = nullptr,
+        const std::function<void(std::shared_ptr<OctreeInternalNode>)> &fi_update = nullptr);
+
+    /// \brief Insert a subtree into the octree.
     /// \brief DFS traversal of Octree from the root, with callback function
     /// called for each node.
     ///
@@ -409,6 +436,32 @@ public:
         const std::shared_ptr<OctreeLeafNode>& leaf,
         const std::shared_ptr<OctreeNodeInfo>& node_info);
 
+    Octree& operator=(const Octree& other) {
+        if (this != &other) {
+            // Copy all necessary fields from 'other' to 'this'
+            // Example:
+            max_depth_ = other.max_depth_;
+            origin_ = other.origin_;
+            size_ = other.size_;
+            // Handle copying of root_node_ if necessary
+        }
+        return *this;
+    }
+
+    std::shared_ptr<Octree> Clone() const {
+        auto cloned = std::make_shared<Octree>();
+        cloned->max_depth_ = this->max_depth_;
+        cloned->origin_ = this->origin_;
+        cloned->size_ = this->size_;
+        if (root_node_) {
+            cloned->root_node_ = root_node_->Clone();
+        }
+        return cloned;
+    }
+
+    virtual std::shared_ptr<OctreeLeafNode> ConvertInternalToLeaf(
+            const std::shared_ptr<OctreeInternalNode>& internal);
+
 private:
     static void TraverseRecurse(
             const std::shared_ptr<OctreeNode>& node,
@@ -429,11 +482,17 @@ private:
             const std::function<void(std::shared_ptr<OctreeInternalNode>)>&
                     f_i_update);
 
-    static std::shared_ptr<OctreeLeafNode> ConvertInternalToLeaf(
-        const std::shared_ptr<OctreeInternalNode>& internal);
+    void InsertSubtreeRecurse(
+        std::shared_ptr<OctreeNode> &node,
+        const std::shared_ptr<OctreeNodeInfo> &node_info,
+        const Eigen::Vector3d &point,
+        const std::shared_ptr<Octree> &subtree,
+        const std::function<std::shared_ptr<OctreeLeafNode>()> &fl_init,
+        const std::function<void(std::shared_ptr<OctreeLeafNode>)> &fl_merge,
+        const std::function<std::shared_ptr<OctreeInternalNode>()> &fi_init,
+        const std::function<void(std::shared_ptr<OctreeInternalNode>)> &fi_update);
 
-    // Helper functions for recursive operations.
-    static std::shared_ptr<OctreeNode> RecursiveCollapse(
+    static std::shared_ptr<OctreeLeafNode> RecursiveCollapse(
          const std::shared_ptr<OctreeNode>& node);
     static std::shared_ptr<OctreeNode> RecursivePrune(
          const std::shared_ptr<OctreeNode>& node);
