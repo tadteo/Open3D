@@ -18,6 +18,9 @@
 #include "open3d/geometry/VoxelGrid.h"
 #include "open3d/utility/Logging.h"
 
+int update_count_ = 0;
+
+
 namespace open3d {
 namespace geometry {
 
@@ -605,6 +608,59 @@ void Octree::InsertPoint(
                        _fi_init, _fi_update);
 }
 
+// void Octree::InsertPointRecurse(
+//         const std::shared_ptr<OctreeNode>& node,
+//         const std::shared_ptr<OctreeNodeInfo>& node_info,
+//         const Eigen::Vector3d& point,
+//         const std::function<std::shared_ptr<OctreeLeafNode>()>& fl_init,
+//         const std::function<void(std::shared_ptr<OctreeLeafNode>)>& fl_update,
+//         const std::function<std::shared_ptr<OctreeInternalNode>()>& fi_init,
+//         const std::function<void(std::shared_ptr<OctreeInternalNode>)>&
+//                 fi_update) {
+//     if (!IsPointInBound(point, node_info->origin_, node_info->size_)) {
+//         return;
+//     }
+//     if (node_info->depth_ > max_depth_) {
+//         return;
+//     } else if (node_info->depth_ == max_depth_) {
+//         if (auto leaf_node = std::dynamic_pointer_cast<OctreeLeafNode>(node)) {
+//             fl_update(leaf_node);
+//         } else {
+//             utility::LogError(
+//                     "Internal error: leaf node must be OctreeLeafNode");
+//         }
+//     } else {
+//         if (auto internal_node =
+//                     std::dynamic_pointer_cast<OctreeInternalNode>(node)) {
+//             // Update internal node with information about the current point
+//             fi_update(internal_node);
+
+//             // Get child node info
+//             std::shared_ptr<OctreeNodeInfo> child_node_info =
+//                     internal_node->GetInsertionNodeInfo(node_info, point);
+
+//             // Create child node with factory function
+//             size_t child_index = child_node_info->child_index_;
+//             if (internal_node->children_[child_index] == nullptr) {
+//                 if (node_info->depth_ == max_depth_ - 1) {
+//                     internal_node->children_[child_index] = fl_init();
+//                 } else {
+//                     internal_node->children_[child_index] = fi_init();
+//                 }
+//             }
+
+//             // Insert to the child
+//             InsertPointRecurse(internal_node->children_[child_index],
+//                                child_node_info, point, fl_init, fl_update,
+//                                fi_init, fi_update);
+//         } else {
+//             utility::LogError(
+//                     "Internal error: internal node must be "
+//                     "OctreeInternalNode");
+//         }
+//     }
+// }
+
 void Octree::InsertPointRecurse(
         const std::shared_ptr<OctreeNode>& node,
         const std::shared_ptr<OctreeNodeInfo>& node_info,
@@ -612,32 +668,43 @@ void Octree::InsertPointRecurse(
         const std::function<std::shared_ptr<OctreeLeafNode>()>& fl_init,
         const std::function<void(std::shared_ptr<OctreeLeafNode>)>& fl_update,
         const std::function<std::shared_ptr<OctreeInternalNode>()>& fi_init,
-        const std::function<void(std::shared_ptr<OctreeInternalNode>)>&
-                fi_update) {
+        const std::function<void(std::shared_ptr<OctreeInternalNode>)>& fi_update) {
+    
+    // Skip insertion if the point is outside the node's bounds.
     if (!IsPointInBound(point, node_info->origin_, node_info->size_)) {
+        utility::LogInfo("Skipping insertion for point {}: not in bound for node with origin {} and size {} at depth {}.",
+                          point.transpose(), node_info->origin_.transpose(), node_info->size_, node_info->depth_);
         return;
     }
-    if (node_info->depth_ > max_depth_) {
-        return;
-    } else if (node_info->depth_ == max_depth_) {
-        if (auto leaf_node = std::dynamic_pointer_cast<OctreeLeafNode>(node)) {
-            fl_update(leaf_node);
+    
+    // If we've reached the maximum depth...
+    if (node_info->depth_ == max_depth_) {
+        // We expect a leaf node here.
+        if (node->IsLeaf()) {
+            auto leaf = std::static_pointer_cast<OctreeLeafNode>(node);
+            // Optionally, update the leaf's counter.
+            leaf->update_count_++;
+
+            
+            if (leaf->update_count_ > 1) {
+                update_count_++;
+                utility::LogInfo("Leaf node at depth {} has been updated {} times. Leaf position: {}",
+                                  node_info->depth_, leaf->update_count_, node_info->origin_.transpose());
+                utility::LogInfo("Total reupdate count : {}", update_count_);
+            }
+            // Call the generic update function.
+            fl_update(leaf);
         } else {
-            utility::LogError(
-                    "Internal error: leaf node must be OctreeLeafNode");
+            utility::LogError("Expected a leaf node at max depth for point {}.", point.transpose());
         }
     } else {
-        if (auto internal_node =
-                    std::dynamic_pointer_cast<OctreeInternalNode>(node)) {
-            // Update internal node with information about the current point
+        // Internal node: update then proceed to the appropriate child.
+        if (auto internal_node = std::dynamic_pointer_cast<OctreeInternalNode>(node)) {
             fi_update(internal_node);
-
-            // Get child node info
-            std::shared_ptr<OctreeNodeInfo> child_node_info =
-                    internal_node->GetInsertionNodeInfo(node_info, point);
-
-            // Create child node with factory function
+            // Get info for child node to insert into.
+            std::shared_ptr<OctreeNodeInfo> child_node_info = internal_node->GetInsertionNodeInfo(node_info, point);
             size_t child_index = child_node_info->child_index_;
+
             if (internal_node->children_[child_index] == nullptr) {
                 if (node_info->depth_ == max_depth_ - 1) {
                     internal_node->children_[child_index] = fl_init();
@@ -645,18 +712,16 @@ void Octree::InsertPointRecurse(
                     internal_node->children_[child_index] = fi_init();
                 }
             }
-
-            // Insert to the child
-            InsertPointRecurse(internal_node->children_[child_index],
-                               child_node_info, point, fl_init, fl_update,
-                               fi_init, fi_update);
+            
+            // Recurse into the selected child.
+            InsertPointRecurse(internal_node->children_[child_index], child_node_info, point, fl_init, fl_update, fi_init, fi_update);
         } else {
-            utility::LogError(
-                    "Internal error: internal node must be "
-                    "OctreeInternalNode");
+            utility::LogError("Internal error: expected an internal node at depth {} for point {}.",
+                                node_info->depth_, point.transpose());
         }
     }
 }
+
 
 // In Octree.cpp, define a helper recursive function:
 void Octree::InsertSubtreeRecurse(
@@ -747,9 +812,19 @@ void Octree::InsertSubtree(
 bool Octree::IsPointInBound(const Eigen::Vector3d& point,
                             const Eigen::Vector3d& origin,
                             const double& size) {
-    bool rc = (Eigen::Array3d(origin) <= Eigen::Array3d(point)).all() &&
-              (Eigen::Array3d(point) < Eigen::Array3d(origin) + size).all();
-    return rc;
+    // bool rc = (Eigen::Array3d(origin) <= Eigen::Array3d(point)).all() &&
+    //           (Eigen::Array3d(point) < Eigen::Array3d(origin) + size).all();
+    // return rc;
+
+    // Test with slightly larger bounds to account for floating-point errors.
+    // Define epsilon relative to the voxel size (you can adjust the multiplier as needed)
+    double epsilon = size * 1e-6;
+
+    // Use inclusive comparisons with epsilon to account for floating-point errors.
+    bool in_lower_bound = (Eigen::Array3d(point) >= Eigen::Array3d(origin) - epsilon).all();
+    bool in_upper_bound = (Eigen::Array3d(point) <= Eigen::Array3d(origin) + size + epsilon).all();
+    
+    return in_lower_bound && in_upper_bound;
 }
 
 void Octree::Traverse(

@@ -17,7 +17,6 @@
 namespace open3d {
 namespace geometry {
 
-
 class PointCloud;
 class VoxelGrid;
 
@@ -80,6 +79,9 @@ public:
             const Json::Value& value);
 
     virtual std::shared_ptr<OctreeNode> Clone() const = 0;
+
+    /// Returns true if this node is a leaf node.
+    virtual bool IsLeaf() const { return false; }
 };
 
 /// \class OctreeInternalNode
@@ -127,6 +129,9 @@ public:
 
     virtual std::shared_ptr<OctreeNode> Clone() const override;
 
+    /// Returns true if this node is a leaf node.
+    virtual bool IsLeaf() const override { return false; }
+
 public:
     /// Use vector instead of C-array for Pybind11, otherwise, need to define
     /// more helper functions
@@ -172,6 +177,15 @@ public:
 /// \brief OctreeLeafNode base class.
 class OctreeLeafNode : public OctreeNode {
 public:
+
+     // A counter for how many times the leaf has been updated.
+    int update_count_;
+
+    OctreeLeafNode() : update_count_(0) {}
+
+    /// All leaf nodes must return true.
+    virtual bool IsLeaf() const override { return true; }
+
     virtual bool operator==(const OctreeLeafNode& other) const = 0;
     virtual std::shared_ptr<OctreeNode> Clone() const override = 0;
 };

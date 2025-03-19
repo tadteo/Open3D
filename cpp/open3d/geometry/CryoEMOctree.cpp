@@ -515,51 +515,6 @@ int CryoEMOctree::CountNodes() const {
     return count;
 }
 
-
-// A simple hash key creator based on a vector's coordinates rounded to 6 decimals.
-std::string CreatePosKey(const Eigen::Vector3d &pos) {
-    std::stringstream ss;
-    ss << std::fixed << std::setprecision(6)
-       << pos.x() << "_" << pos.y() << "_" << pos.z();
-    return ss.str();
-}
-
-// Helper function: recursively traverse the octree and, for each leaf, compute an approximate center
-// and add it to a map for uniqueness checking.
-void CollectLeafPositions(const std::shared_ptr<OctreeNode>& node,
-                          const Eigen::Vector3d &node_origin,
-                          double node_size,
-                          std::unordered_map<std::string, int>& pos_counts) {
-    if (!node) return;
-    // Check if this is a CryoEM leaf node. (You may also want to include other leaf types as needed.)
-    auto leaf = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(node);
-    if (leaf) {
-        // Compute an approximate cell center.
-        Eigen::Vector3d center = node_origin + Eigen::Vector3d::Constant(node_size / 2.0);
-        std::string key = CreatePosKey(center);
-        pos_counts[key]++;
-    } else {
-        // For internal nodes, assume the node is an octree internal node.
-        auto internal = std::dynamic_pointer_cast<OctreeInternalNode>(node);
-        if (!internal) return;
-        double child_size = node_size / 2.0;
-        // Loop through the eight children. The common indexing for octants can be used:
-        // Bit 0: +X, Bit 1: +Y, Bit 2: +Z.
-        for (size_t i = 0; i < 8; ++i) {
-            // Compute the corresponding offset for each child.
-            Eigen::Vector3d offset(
-                (i & 1) ? child_size : 0,
-                (i & 2) ? child_size : 0,
-                (i & 4) ? child_size : 0
-            );
-            // For each valid child, compute its origin and traverse recursively.
-            if (i < internal->children_.size() && internal->children_[i]) {
-                CollectLeafPositions(internal->children_[i], node_origin + offset, child_size, pos_counts);
-            }
-        }
-    }
-}
-
 void CryoEMOctree::ConvertVoxelMapToOctree(
     const py::array_t<float>& density_array,
     double map_size,
@@ -688,22 +643,6 @@ void CryoEMOctree::ConvertVoxelMapToOctree(
         sum_nodes += subtree_data->CountNodes();
     }
     utility::LogInfo("Sum of all nodes in all subtrees: {}", sum_nodes);
-
-    // Check for duplicate leaf node positions
-    // std::unordered_map<std::string, int> position_counts_0;
-    // for (auto &subtree_data : subregions_octree) {
-    //     // For each subtree, traverse from its root node.
-    //     CollectLeafPositions(subtree_data->root_node_, subtree_data->origin_, subtree_data->size_, position_counts_0);
-    // }
-
-    // // Now, count duplicates.
-    // int duplicate_positions = 0;
-    // for (const auto &pair : position_counts_0) {
-    //     if (pair.second > 1) {
-    //         duplicate_positions += (pair.second - 1);
-    //     }
-    // }
-    // utility::LogInfo("Total duplicate leaf node positions found (should be 0): {}", duplicate_positions);
 
     // END DEBUGGING
 
