@@ -11,6 +11,12 @@ namespace py = pybind11;
 namespace open3d {
 namespace geometry {
 
+// Move this struct definition to namespace scope, before any class definitions
+struct NodeCounts {
+    int total_nodes;
+    int internal_nodes;
+    int leaf_nodes;
+};
 
 /**
  * @brief A derived octree leaf node class that stores Cryo-EM specific data.
@@ -152,7 +158,7 @@ public:
      * @brief Returns the total number of nodes in the octree.
      * @return The count of nodes.
      */
-    int CountNodes() const;
+    NodeCounts CountNodes() const;
 
     /**
      * @brief Recursively compresses the octree using a standard fixed tolerance.

@@ -10,6 +10,19 @@ namespace geometry {
 namespace py = pybind11;
 
 void pybind_cryoem_octree(py::module &m) {
+    // Add NodeCounts struct binding
+    py::class_<NodeCounts>(m, "NodeCounts")
+        .def(py::init<>())
+        .def_readwrite("total_nodes", &NodeCounts::total_nodes)
+        .def_readwrite("internal_nodes", &NodeCounts::internal_nodes)
+        .def_readwrite("leaf_nodes", &NodeCounts::leaf_nodes)
+        .def("__repr__", [](const NodeCounts &nc) {
+            return std::string("NodeCounts(total_nodes=") + 
+                   std::to_string(nc.total_nodes) +
+                   ", internal_nodes=" + std::to_string(nc.internal_nodes) +
+                   ", leaf_nodes=" + std::to_string(nc.leaf_nodes) + ")";
+        });
+
     // Bind the leaf node
     py::class_<CryoEMOctreeLeafNode,
                std::shared_ptr<CryoEMOctreeLeafNode>,
@@ -62,9 +75,8 @@ void pybind_cryoem_octree(py::module &m) {
             // Return a tuple: (merge_count, avg_error)
             return py::make_tuple(merge_count, avg_error);
         }, "Compress the octree given a base tolerance.")
-        .def("count_nodes", [](const CryoEMOctree &octree) {
-            return octree.CountNodes();
-        }, "Count the total number of nodes in the octree.")
+        .def("count_nodes", &CryoEMOctree::CountNodes,
+             "Count the total number of nodes in the octree, returning a NodeCounts struct.")
         .def("__repr__", [](const CryoEMOctree &oct) {
             return std::string("CryoEMOctree with max_depth=") +
                    std::to_string(oct.max_depth_) +

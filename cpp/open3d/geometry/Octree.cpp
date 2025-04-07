@@ -688,9 +688,9 @@ void Octree::InsertPointRecurse(
             
             if (leaf->update_count_ > 1) {
                 update_count_++;
-                utility::LogInfo("Leaf node at depth {} has been updated {} times. Leaf position: {}",
-                                  node_info->depth_, leaf->update_count_, node_info->origin_.transpose());
-                utility::LogInfo("Total reupdate count : {}", update_count_);
+                // utility::LogInfo("Leaf node at depth {} has been updated {} times. Leaf position: {}",
+                //                   node_info->depth_, leaf->update_count_, node_info->origin_.transpose());
+                // utility::LogInfo("Total reupdate count : {}", update_count_);
             }
             // Call the generic update function.
             fl_update(leaf);

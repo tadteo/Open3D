@@ -364,7 +364,8 @@ void CryoEMOctree::CompressOctree(float tolerance, int &merge_count, float &avg_
         changes = false;
         CompressOctreeRecursive(root_node_, tolerance, merge_count, merge_errors, changes);
         
-        int current_node_count = CountNodes();
+        auto counts = CountNodes();
+        int current_node_count = counts.total_nodes;
         utility::LogInfo("[DEBUG] End of pass {} ; Total merges: {} ; Node count: {}",
                          pass_count, merge_count, current_node_count);
     }
@@ -387,12 +388,17 @@ void CryoEMOctree::CompressOctreeAdaptive(float base_tolerance, int &merge_count
     bool changes = true;
     int pass_count = 0;
     
+    auto counts = CountNodes();
+    int current_node_count = counts.total_nodes;
+    utility::LogInfo("[DEBUG] Node count before merging {}", current_node_count);
+    
     while (changes) {
         pass_count++;
         changes = false;
         CompressOctreeRecursiveAdaptive(root_node_, base_tolerance, merge_count, merge_errors, changes);
         
-        int current_node_count = CountNodes();
+        auto counts = CountNodes();
+        current_node_count = counts.total_nodes;
         utility::LogInfo("[DEBUG] Adaptive pass {} ; Total merges: {} ; Node count: {}",
                          pass_count, merge_count, current_node_count);
     }
@@ -484,22 +490,40 @@ void CryoEMOctree::CompressOctreeRecursiveAdaptive(std::shared_ptr<OctreeNode> &
     changes = true;
 }
 
-// Helper function to recursively count nodes.
-static int CountNodesRecursive(const std::shared_ptr<OctreeNode>& node) {
+// Helper function to recursively count nodes
+static NodeCounts CountNodesRecursive(const std::shared_ptr<OctreeNode>& node, int current_depth = 0, int max_depth = 0) {
     if (!node)
-        return 0;
-    int count = 1;
+        return {0, 0, 0};
+        
+    NodeCounts counts = {1, 0, 0};  // Start with 1 total node
+    
     auto internal = std::dynamic_pointer_cast<OctreeInternalNode>(node);
     if (internal) {
+        counts.internal_nodes = 1;  // This is an internal node
         for (const auto &child : internal->children_) {
-            count += CountNodesRecursive(child);
+            auto child_counts = CountNodesRecursive(child, current_depth + 1, max_depth);
+            counts.total_nodes += child_counts.total_nodes;
+            counts.internal_nodes += child_counts.internal_nodes;
+            counts.leaf_nodes += child_counts.leaf_nodes;
+        }
+    } else {
+        counts.leaf_nodes = 1;  // This is a leaf node
+        if (current_depth < max_depth) {
+            // Log information about this non-maximal leaf
+            auto leaf = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(node);
+            utility::LogInfo("Found non-maximal leaf at depth {}/{} with density {}",
+                           current_depth, max_depth,
+                           leaf ? leaf->density_ : 0.0f);
         }
     }
-    return count;
+    
+    return counts;
 }
 
-int CryoEMOctree::CountNodes() const {
-    int count = CountNodesRecursive(root_node_);
+NodeCounts CryoEMOctree::CountNodes() const {
+    // Now pass the max_depth_ from the octree to the recursive function
+    auto counts = CountNodesRecursive(root_node_, 0, this->max_depth_);
+    
     // Print node structure details
     utility::LogInfo("Root node exists: {}", root_node_ != nullptr);
     if (root_node_) {
@@ -512,7 +536,11 @@ int CryoEMOctree::CountNodes() const {
             utility::LogInfo("Root is internal with {} non-null children", child_count);
         }
     }
-    return count;
+    
+    utility::LogInfo("Total nodes: {}, Internal nodes: {}, Leaf nodes: {}", 
+                    counts.total_nodes, counts.internal_nodes, counts.leaf_nodes);
+    
+    return counts;
 }
 
 void CryoEMOctree::ConvertVoxelMapToOctree(
@@ -616,9 +644,10 @@ void CryoEMOctree::ConvertVoxelMapToOctree(
                                 y >= 0 && y < static_cast<int>(ny) &&
                                 z >= 0 && z < static_cast<int>(nz)) {
                                 float density = data_ptr[x * ny * nz + y * nz + z];
-                                double pos_x = x * voxelSizeX;
-                                double pos_y = y * voxelSizeY;
-                                double pos_z = z * voxelSizeZ;
+                                // Inserting the points (whe give the position at the center of the leaf to check position during insertion to avoid misalignments)
+                                double pos_x = x * voxelSizeX + (voxelSizeX/2);
+                                double pos_y = y * voxelSizeY + (voxelSizeY/2);
+                                double pos_z = z * voxelSizeZ + (voxelSizeZ/2);
                                 Eigen::Vector3d pos(pos_x, pos_y, pos_z);
                                 points_inserted++;
                                 subregions_octree[i]->InsertDensityPoint(pos, density);
@@ -640,7 +669,8 @@ void CryoEMOctree::ConvertVoxelMapToOctree(
     utility::LogInfo("Counting nodes in all subtrees");
     int sum_nodes = 0;
     for (auto &subtree_data : subregions_octree) {
-        sum_nodes += subtree_data->CountNodes();
+        auto counts = subtree_data->CountNodes();
+        sum_nodes += counts.total_nodes;
     }
     utility::LogInfo("Sum of all nodes in all subtrees: {}", sum_nodes);
 
@@ -658,7 +688,8 @@ void CryoEMOctree::ConvertVoxelMapToOctree(
     open3d::utility::LogInfo("Tree reconstruction took {} seconds", merge_duration);
 
     //count nodes after merging
-    int node_count = this->CountNodes();
+    auto counts = this->CountNodes();
+    int node_count = counts.total_nodes;
     utility::LogInfo("Node count after tree reconstruction: {}", node_count);
 }
 
