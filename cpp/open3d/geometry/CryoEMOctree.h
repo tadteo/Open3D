@@ -66,6 +66,9 @@ public:
 
     // Cryo-EM specific data field.
     float density_;
+    // Range of the original voxel densities covered by this leaf (used for error-bounded merging).
+    float min_density_;
+    float max_density_;
 };
 
 /**
@@ -147,7 +150,7 @@ public:
         int target_tasks = 1
         );
 
-    void CompressNode(std::shared_ptr<OctreeNode>& node);
+    bool CompressNode(std::shared_ptr<OctreeNode>& node);
 
     /**
      * @brief Splits the octree for further refinement.
