@@ -34,17 +34,17 @@ namespace geometry {
  *
  * @param node A reference to the node pointer to possibly compress.
  */
-void CryoEMOctree::CompressNode(std::shared_ptr<OctreeNode>& node) {
+bool CryoEMOctree::CompressNode(std::shared_ptr<OctreeNode>& node) {
     if (!node) {
         utility::LogInfo("Node is null");
-        return;
+        return false;
     }
 
     // Check if the node is an internal Cryo‑EM node.
     auto internal = std::dynamic_pointer_cast<CryoEMOctreeInternalNode>(node);
     if (!internal) {
         utility::LogInfo("Node is not an internal node");
-        return;
+        return false;
     }
 
     // Check that every non-null child is a Cryo‑EM leaf node.
@@ -62,34 +62,41 @@ void CryoEMOctree::CompressNode(std::shared_ptr<OctreeNode>& node) {
     }
     if (!eligible || leaves.empty()) {
         utility::LogInfo("Node is not eligible for compression");
-        return;
+        return false;
     }
-    // Aggregate the leaf data using arithmetic mean.
+    // Aggregate the leaf data using arithmetic mean; keep the range of the original voxels.
     float sum_density = 0.0f;
+    float min_density = std::numeric_limits<float>::max();
+    float max_density = std::numeric_limits<float>::lowest();
     for (const auto& leaf : leaves) {
         sum_density += leaf->density_;
+        min_density = std::min(min_density, leaf->min_density_);
+        max_density = std::max(max_density, leaf->max_density_);
     }
-    
-    float new_density = sum_density / static_cast<float>(leaves.size());
-    
+
     // Construct a new leaf node representing the compressed branch.
     auto merged_leaf = std::make_shared<CryoEMOctreeLeafNode>();
-    merged_leaf->density_ = new_density;
-    
+    merged_leaf->density_ = sum_density / static_cast<float>(leaves.size());
+    merged_leaf->min_density_ = min_density;
+    merged_leaf->max_density_ = max_density;
+
     // Update the node in place by replacing it with the merged leaf.
     node = merged_leaf;
+    return true;
 }
 
 //==============================================================================
 // Implementation for CryoEMOctreeLeafNode
 //==============================================================================
 
-CryoEMOctreeLeafNode::CryoEMOctreeLeafNode() 
-    : density_(0.0f) {}
+CryoEMOctreeLeafNode::CryoEMOctreeLeafNode()
+    : density_(0.0f), min_density_(0.0f), max_density_(0.0f) {}
 
 std::shared_ptr<OctreeNode> CryoEMOctreeLeafNode::Clone() const {
     auto node = std::make_shared<CryoEMOctreeLeafNode>();
     node->density_ = density_;
+    node->min_density_ = min_density_;
+    node->max_density_ = max_density_;
     return node;
 }
 
@@ -124,7 +131,9 @@ std::function<void(std::shared_ptr<OctreeLeafNode>)>
 CryoEMOctreeLeafNode::GetUpdateFunction(float density) {
     return [density](std::shared_ptr<OctreeLeafNode> node) -> void {
         if (auto leaf = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(node)) {
-            leaf->density_ = density;  // Assuming density_ is a member of CryoEMOctreeLeafNode
+            leaf->density_ = density;
+            leaf->min_density_ = density;
+            leaf->max_density_ = density;
         } else {
             utility::LogError("Internal error: leaf node must be CryoEMOctreeLeafNode");
         }
@@ -331,8 +340,8 @@ void CryoEMOctree::CompressOctreeRecursive(std::shared_ptr<OctreeNode> &node,
     float sum_density = 0.0f;
     for (const auto &leaf : leaf_children) {
         float d = leaf->density_;
-        if (d < min_density) { min_density = d; }
-        if (d > max_density) { max_density = d; }
+        min_density = std::min(min_density, leaf->min_density_);
+        max_density = std::max(max_density, leaf->max_density_);
         sum_density += d;
     }
     if ((max_density - min_density) > tolerance) return;
@@ -343,11 +352,12 @@ void CryoEMOctree::CompressOctreeRecursive(std::shared_ptr<OctreeNode> &node,
         error_sum += std::fabs(leaf->density_ - avg_density);
     }
     float error_avg = error_sum / leaf_children.size();
-    merge_errors.push_back(error_avg);
-
     // Compress the node.
-    CompressNode(node);
-    merge_count++;
+    if (CompressNode(node)) {
+        merge_errors.push_back(error_avg);
+        merge_count++;
+        changes = true;
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -452,8 +462,8 @@ void CryoEMOctree::CompressOctreeRecursiveAdaptive(std::shared_ptr<OctreeNode> &
         float d = leaf->density_;
         densities.push_back(d);
         sum_density += d;
-        min_density = std::min(min_density, d);
-        max_density = std::max(max_density, d);
+        min_density = std::min(min_density, leaf->min_density_);
+        max_density = std::max(max_density, leaf->max_density_);
     }
     float avg_density = sum_density / static_cast<float>(leaf_children.size());
 
@@ -482,12 +492,12 @@ void CryoEMOctree::CompressOctreeRecursiveAdaptive(std::shared_ptr<OctreeNode> &
         error_sum += std::fabs(leaf->density_ - avg_density);
     }
     float error_avg = error_sum / static_cast<float>(leaf_children.size());
-    merge_errors.push_back(error_avg);
-
     // Compress the node.
-    CompressNode(node);
-    merge_count++;
-    changes = true;
+    if (CompressNode(node)) {
+        merge_errors.push_back(error_avg);
+        merge_count++;
+        changes = true;
+    }
 }
 
 // Helper function to recursively count nodes
@@ -508,13 +518,6 @@ static NodeCounts CountNodesRecursive(const std::shared_ptr<OctreeNode>& node, i
         }
     } else {
         counts.leaf_nodes = 1;  // This is a leaf node
-        if (current_depth < max_depth) {
-            // Log information about this non-maximal leaf
-            auto leaf = std::dynamic_pointer_cast<CryoEMOctreeLeafNode>(node);
-            utility::LogInfo("Found non-maximal leaf at depth {}/{} with density {}",
-                           current_depth, max_depth,
-                           leaf ? leaf->density_ : 0.0f);
-        }
     }
     
     return counts;
@@ -566,10 +569,12 @@ void CryoEMOctree::ConvertVoxelMapToOctree(
     // Print the shape of the density array
     utility::LogInfo("Density array shape: {}x{}x{}", nx, ny, nz);
 
-    // Compute voxel sizes in physical units (it should be the same for all the leaf nodes)
-    double voxelSizeX = map_size / static_cast<double>(nx);
-    double voxelSizeY = map_size / static_cast<double>(ny);
-    double voxelSizeZ = map_size / static_cast<double>(nz);
+    // Leaves are cubic voxels: the octree side divided by 2^max_depth, the same along every axis.
+    double voxelSizeX = this->size_ / static_cast<double>(1 << this->max_depth_);
+    double voxelSizeY = voxelSizeX;
+    double voxelSizeZ = voxelSizeX;
+    // Worker threads may log, and the Python log sink needs the GIL: release it for the parallel part.
+    py::gil_scoped_release release_gil;
 
     // Define grid size based on dimensions
     // typedef Eigen::Matrix<long double, 3, 1> Vector3ld;
@@ -602,6 +607,8 @@ void CryoEMOctree::ConvertVoxelMapToOctree(
 
     // Create a vector to hold all the sub octrees.
     std::vector<std::shared_ptr<CryoEMOctree>> subregions_octree;
+    std::vector<Eigen::Vector3i> subregions_index;  // first voxel index of each subtree
+    const int side_voxels = 1 << depthOfSubtrees;
     for (int i = 0; i < numSubdivisions; ++i) {
         for (int j = 0; j < numSubdivisions; ++j) {
             for (int k = 0; k < numSubdivisions; ++k) {
@@ -618,6 +625,7 @@ void CryoEMOctree::ConvertVoxelMapToOctree(
                                     depthOfSubtrees, 
                                     origin,
                                     subregion_size_length));
+                subregions_index.emplace_back(i * side_voxels, j * side_voxels, k * side_voxels);
             }
         }
     }
@@ -633,8 +641,8 @@ void CryoEMOctree::ConvertVoxelMapToOctree(
         [&](const tbb::blocked_range<size_t> &range) {
             for (size_t i = range.begin(); i < range.end(); i++) {
                 //Get the origin index of the subtree
-                Eigen::Vector3i subtree_origin_index = (subregions_octree[i]->origin_ / voxelSizeX).cast<int>();
-                int side_length = static_cast<int>(subregions_octree[i]->size_ / voxelSizeX);
+                Eigen::Vector3i subtree_origin_index = subregions_index[i];
+                int side_length = side_voxels;
 
                 for (int x = subtree_origin_index.x(); x < subtree_origin_index.x() + side_length; x++) {
                     for (int y = subtree_origin_index.y(); y < subtree_origin_index.y() + side_length; y++) {
